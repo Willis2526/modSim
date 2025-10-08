@@ -1,0 +1,16 @@
+[Unit]
+Description=ModSim Service
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=15
+User=root
+SyslogIdentifier=modSim
+WorkingDirectory=/opt/vertech/modSim/
+ExecStart=/opt/vertech/modSim/env/bin/python -m modSim
+
+[Install]
+WantedBy=multi-user.target

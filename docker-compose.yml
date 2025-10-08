@@ -1,0 +1,14 @@
+services:
+  modsim:
+    build: .
+    container_name: modsim
+    restart: unless-stopped
+    ports:
+      - "502:502/tcp"
+      - "8000:8000/tcp"
+    volumes:
+      # Mount only the data directory for persistent storage (settings.db, settings.json)
+      - ./data:/app/data
+    working_dir: /app/data
+    environment:
+      - PYTHONUNBUFFERED=1
