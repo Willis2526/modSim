@@ -76,6 +76,12 @@ If the `settings.json` file does not exist, it will be created with the followin
       "ProductCode": "MSIM",
       "MajorMinorRevision": "1.0"
     },
+    "register_sizes": {
+      "co": 100,
+      "di": 100,
+      "hr": 100,
+      "ir": 100
+    },
     "config": {
       "registers": [{ "slave_id": 0, "register_type": "all", "simulate": true }]
     }
@@ -85,6 +91,18 @@ If the `settings.json` file does not exist, it will be created with the followin
   }
 }
 ```
+
+> **NOTE:** The `settings.json` file is used only for the initial setup of the program. Afterwards, configuration is controlled with the API unless the `settings.db` file is deleted, then the `settings.json` can be used again.
+
+#### Register Sizes
+The `register_sizes` field allows you to configure individual sizes for each register type:
+- `co` - Coils (discrete outputs)
+- `di` - Discrete Inputs
+- `hr` - Holding Registers
+- `ir` - Input Registers
+
+Each type can have a different size, allowing for flexible memory allocation based on your simulation needs.
+
 With the default config, the server will be configured automatically to simulate all registers with:
 ```json
 "config": {
@@ -150,7 +168,8 @@ The server can be configured over a REST API located at **http://server_address:
 ### Register Management
 - **POST /configure-registers**
   Configure Modbus registers (addresses, values, simulation settings).
-  Example:
+
+  **Basic Examples:**
   ```json
   {
     "registers": [
@@ -160,11 +179,69 @@ The server can be configured over a REST API located at **http://server_address:
   }
   ```
 
-  Or to specify all registers for simulation:
+  **Simulate all registers:**
   ```json
   {
     "registers": [
       {"slave_id": 1, "register_type": "all", "simulate": true}
+    ]
+  }
+  ```
+
+  **New Features:**
+
+  1. **Register Range Simulation** - Simulate a range of consecutive addresses:
+  ```json
+  {
+    "registers": [
+      {
+        "server_id": 0,
+        "slave_id": 0,
+        "register_type": "hr",
+        "address": 0,
+        "address_end": 50,
+        "simulate": true
+      }
+    ]
+  }
+  ```
+  This simulates holding registers from address 0 to 50 (inclusive).
+
+  2. **Individual Register Type Sizes** - Override the default size for a specific register type:
+  ```json
+  {
+    "registers": [
+      {
+        "server_id": 0,
+        "slave_id": 0,
+        "register_type": "co",
+        "register_size": 200,
+        "simulate": true
+      }
+    ]
+  }
+  ```
+  This creates a coil register space of 200 addresses instead of the default 100.
+
+  3. **Combined Configuration** - Use ranges and custom sizes together:
+  ```json
+  {
+    "registers": [
+      {
+        "slave_id": 0,
+        "register_type": "hr",
+        "address": 0,
+        "address_end": 99,
+        "simulate": true
+      },
+      {
+        "slave_id": 0,
+        "register_type": "ir",
+        "address": 100,
+        "address_end": 199,
+        "register_size": 300,
+        "simulate": true
+      }
     ]
   }
   ```
@@ -190,6 +267,13 @@ The server can be configured over a REST API located at **http://server_address:
   }
   ```
   This applies the default config to all servers except server 1, which gets its own specific configuration.
+
+  **Available Register Types:**
+  - `all` - All register types
+  - `co` - Coils (discrete outputs)
+  - `di` - Discrete Inputs
+  - `hr` - Holding Registers
+  - `ir` - Input Registers
 
 - **GET /get-registers**  
   Retrieve the current register configuration.

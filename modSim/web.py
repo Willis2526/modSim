@@ -45,6 +45,15 @@ class RegisterConfig(BaseModel):
                         "server_id": 0,
                         "slave_id": 1,
                         "register_type": "hr",
+                        "address": 0,
+                        "address_end": 50,
+                        "simulate": True
+                    },
+                    {
+                        "server_id": 0,
+                        "slave_id": 1,
+                        "register_type": "co",
+                        "register_size": 200,
                         "simulate": True
                     }
                 ]

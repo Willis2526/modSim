@@ -31,7 +31,8 @@ class Server:
                 port,
                 self.settings["modbus"]["identity"],
                 self.settings["modbus"]["slaves"],
-                self.settings["modbus"]["registers"]
+                self.settings["modbus"]["registers"],
+                self.settings["modbus"].get("register_sizes")
             )
             self.modbus_servers[instanceNumber].start()
             instanceNumber += 1
@@ -100,6 +101,12 @@ class Server:
                 "VendorName": "ModbusSimulator",
                 "ProductCode": "MSIM",
                 "MajorMinorRevision": "1.0"
+                },
+                "register_sizes": {
+                    "co": 100,
+                    "di": 100,
+                    "hr": 100,
+                    "ir": 100
                 },
                 "config": {
                     "registers": [{

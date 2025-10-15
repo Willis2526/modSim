@@ -15,19 +15,27 @@ from pymodbus.server import StartTcpServer
 logger = logging.getLogger(__name__)
 
 
-def buildModbusContext(numberOfSlaves, numberOfRegisters):
+def buildModbusContext(numberOfSlaves, registerSizes=None):
     """
     Build the modbus context.
     Using address 0 to match Modbus protocol where client addresses start at 0.
-    Note: We allocate numberOfRegisters + 1 to work around pymodbus address validation.
+    Note: We allocate registerSize + 1 to work around pymodbus address validation.
+
+    Args:
+        numberOfSlaves: Number of slave devices
+        registerSizes: Dict with keys 'co', 'di', 'hr', 'ir' specifying size for each type.
+                      If None, defaults to 100 for all types.
     """
+    if registerSizes is None:
+        registerSizes = {'co': 100, 'di': 100, 'hr': 100, 'ir': 100}
+
     slaves = {}
 
     baseDataStore = ModbusDeviceContext(
-        di=ModbusSequentialDataBlock(0, [False] * (numberOfRegisters + 1)),
-        co=ModbusSequentialDataBlock(0, [False] * (numberOfRegisters + 1)),
-        hr=ModbusSequentialDataBlock(0, [0] * (numberOfRegisters + 1)),
-        ir=ModbusSequentialDataBlock(0, [0] * (numberOfRegisters + 1))
+        di=ModbusSequentialDataBlock(0, [False] * (registerSizes.get('di', 100) + 1)),
+        co=ModbusSequentialDataBlock(0, [False] * (registerSizes.get('co', 100) + 1)),
+        hr=ModbusSequentialDataBlock(0, [0] * (registerSizes.get('hr', 100) + 1)),
+        ir=ModbusSequentialDataBlock(0, [0] * (registerSizes.get('ir', 100) + 1))
     )
 
     # Create datastores for slaves
@@ -42,7 +50,7 @@ def buildModbusContext(numberOfSlaves, numberOfRegisters):
 class Server(threading.Thread):
     """Modbus Server"""
 
-    def __init__(self, serverId, address="0.0.0.0", port=502, identity={}, numberOfSlaves=1, numberOfRegisters=100):
+    def __init__(self, serverId, address="0.0.0.0", port=502, identity={}, numberOfSlaves=1, numberOfRegisters=100, registerSizes=None):
         super().__init__(name="mod_server", daemon=True)
         self._stop_event = threading.Event()
         self.serverId = serverId
@@ -50,6 +58,12 @@ class Server(threading.Thread):
         self.port = port
         self.identity = identity
         self.numberOfRegisters = numberOfRegisters
+        self.registerSizes = registerSizes if registerSizes else {
+            'co': numberOfRegisters,
+            'di': numberOfRegisters,
+            'hr': numberOfRegisters,
+            'ir': numberOfRegisters
+        }
         self.running = False
         self.regiser_type_map = {
             "all": 0,
@@ -60,7 +74,7 @@ class Server(threading.Thread):
         }
 
         # Build the context
-        self.context = buildModbusContext(numberOfSlaves, numberOfRegisters)
+        self.context = buildModbusContext(numberOfSlaves, self.registerSizes)
 
     def getDetails(self):
         """Get the server details"""
@@ -70,6 +84,7 @@ class Server(threading.Thread):
             "port": self.port,
             "identity": self.identity,
             "number_of_registers": self.numberOfRegisters,
+            "register_sizes": self.registerSizes,
             "running": self.running
         }
 
@@ -178,6 +193,8 @@ class Server(threading.Thread):
             "slave_id": <int>,
             "register_type": "co"|"di"|"hr"|"ir"|"all",
             "address": <int>,
+            "address_end": <int|None>,  # Optional: end address for range
+            "register_size": <int|None>,  # Optional: override register size
             "simulate": <bool>
         }
         """
@@ -187,7 +204,9 @@ class Server(threading.Thread):
         for reg in registers:
             if not reg.get("simulate"):
                 continue
-            if reg.get("server_id") != self.serverId:
+            # If server_id is None, apply to all servers; otherwise match specific server
+            reg_server_id = reg.get("server_id")
+            if reg_server_id is not None and reg_server_id != self.serverId:
                 continue
 
             slave_id = reg.get("slave_id")
@@ -202,6 +221,9 @@ class Server(threading.Thread):
                                reg_type_key)
                 continue
 
+            # Get register size (use override if provided, otherwise use configured size)
+            register_size_override = reg.get("register_size")
+
             # Helper to generate a block of values
             def _gen_block(kind, count):
                 if kind in ("di", "co"):
@@ -211,7 +233,9 @@ class Server(threading.Thread):
             # Write a full block for the given kind
             def _write_full(kind):
                 code = register_type_map[kind]
-                values = _gen_block(kind, self.numberOfRegisters)
+                # Use override size if provided, otherwise use configured size for this type
+                size = register_size_override if register_size_override is not None else self.registerSizes.get(kind, self.numberOfRegisters)
+                values = _gen_block(kind, size)
                 self.context[slave_id].setValues(code, 0, values)
 
             # Handle "all" by writing every kind
@@ -222,16 +246,37 @@ class Server(threading.Thread):
 
             # Handle a specific kind
             reg_type_code = register_type_map[reg_type_key]
-            addr = int(reg.get("address", 0))
+            addr_start = int(reg.get("address", 0))
+            addr_end = reg.get("address_end")
 
-            if 0 <= addr < self.numberOfRegisters:
+            # Get the max size for this register type
+            max_size = register_size_override if register_size_override is not None else self.registerSizes.get(reg_type_key, self.numberOfRegisters)
+
+            # Handle range simulation
+            if addr_end is not None:
+                addr_end = int(addr_end)
+                if 0 <= addr_start < max_size and 0 <= addr_end < max_size and addr_start <= addr_end:
+                    count = addr_end - addr_start + 1
+                    values = _gen_block(reg_type_key, count)
+                    self.context[slave_id].setValues(reg_type_code, addr_start, values)
+                else:
+                    logger.warning(
+                        "Address range %s..%s out of range 0..%s for slave %s (%s).",
+                        addr_start,
+                        addr_end,
+                        max_size - 1,
+                        slave_id,
+                        reg_type_key
+                    )
+            # Handle single address simulation
+            elif 0 <= addr_start < max_size:
                 value = (_gen_block(reg_type_key, 1)[0])
-                self.context[slave_id].setValues(reg_type_code, addr, [value])
+                self.context[slave_id].setValues(reg_type_code, addr_start, [value])
             else:
                 logger.warning(
                     "Address %s out of range 0..%s for slave %s (%s).",
-                    addr,
-                    self.numberOfRegisters - 1,
+                    addr_start,
+                    max_size - 1,
                     slave_id,
                     reg_type_key
                 )

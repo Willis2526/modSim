@@ -23,7 +23,9 @@ class Database:
                             server_id INTEGER NULL,         -- Server ID
                             slave_id INTEGER NOT NULL,      -- Slave ID associated with the register
                             register_type TEXT NOT NULL,    -- Type of register (e.g., 'hr', 'ir', 'co', 'di')
-                            address INTEGER NOT NULL,       -- Address of the register
+                            address INTEGER NOT NULL,       -- Start address of the register (or 0 for all)
+                            address_end INTEGER NULL,       -- End address for range simulation (NULL for single address)
+                            register_size INTEGER NULL,     -- Size of register type (NULL to use server default)
                             simulate INTEGER NOT NULL       -- Whether the register is simulated (0 or 1)
                         )
                         """
@@ -36,7 +38,7 @@ class Database:
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT server_id, slave_id, register_type, address, simulate FROM registers")
+                cursor.execute("SELECT server_id, slave_id, register_type, address, address_end, register_size, simulate FROM registers")
                 results = cursor.fetchall()
                 return [
                     {
@@ -44,7 +46,9 @@ class Database:
                         "slave_id": row[1],
                         "register_type": row[2],
                         "address": row[3],
-                        "simulate": bool(row[4])
+                        "address_end": row[4],
+                        "register_size": row[5],
+                        "simulate": bool(row[6])
                     }
                     for row in results
                 ]
@@ -67,8 +71,10 @@ class Database:
                     slave_id = reg.get("slave_id")
                     register_type = reg.get("register_type")
                     address = reg.get("address", 0)
+                    address_end = reg.get("address_end", None)
+                    register_size = reg.get("register_size", None)
                     simulate = int(reg.get("simulate", False))
-                    
+
                     if slave_id is None:
                         errors.append("Missing slave_id")
 
@@ -77,13 +83,13 @@ class Database:
 
                     if errors:
                          return {"success": False, "errors": errors}
-                    
+
                     cursor.execute(
                         """
-                        INSERT INTO registers (server_id, slave_id, register_type, address, simulate)
-                        VALUES (?, ?, ?, ?, ?)
+                        INSERT INTO registers (server_id, slave_id, register_type, address, address_end, register_size, simulate)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                         """,
-                        (server_id, slave_id, register_type, address, simulate)
+                        (server_id, slave_id, register_type, address, address_end, register_size, simulate)
                     )
 
                 conn.commit()
