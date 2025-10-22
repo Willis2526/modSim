@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(timeout 10 python:*)",
+      "Bash(pkill:*)",
+      "Bash(timeout 5 python:*)",
+      "Bash(taskkill:*)",
+      "Bash(timeout 3 python:*)",
+      "Bash(del settings.db)",
+      "Bash(curl -s -X POST http://localhost:8000/configure-registers -H \"Content-Type: application/json\" -d '{\"\"registers\"\": [{\"\"server_id\"\": 0, \"\"slave_id\"\": 0, \"\"register_type\"\": \"\"hr\"\", \"\"address\"\": 200, \"\"simulate\"\": true, \"\"simulation_mode\"\": \"\"sine\"\", \"\"simulation_config\"\": {\"\"amplitude\"\": 100, \"\"offset\"\": 200, \"\"period\"\": 20}}, {\"\"server_id\"\": 0, \"\"slave_id\"\": 0, \"\"register_type\"\": \"\"hr\"\", \"\"address\"\": 300, \"\"simulate\"\": true, \"\"simulation_mode\"\": \"\"ramp\"\", \"\"simulation_config\"\": {\"\"min\"\": 0, \"\"max\"\": 50, \"\"step\"\": 5}}, {\"\"server_id\"\": 0, \"\"slave_id\"\": 0, \"\"register_type\"\": \"\"hr\"\", \"\"address\"\": 400, \"\"simulate\"\": true, \"\"simulation_mode\"\": \"\"static\"\", \"\"simulation_config\"\": {\"\"value\"\": 42}}]}')",
+      "Bash(curl:*)",
+      "Bash(timeout 120 python -m pytest:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

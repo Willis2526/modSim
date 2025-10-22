@@ -4,29 +4,73 @@ import logging
 import threading
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 
 logger = logging.getLogger(__name__)
 
 logging.getLogger("asyncio").setLevel(logging.WARNING)
 
+class ModbusIdentity(BaseModel):
+    VendorName: str = "ModbusSimulator"
+    ProductCode: str = "MSIM"
+    MajorMinorRevision: str = "1.0"
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "VendorName": "ModbusSimulator",
+                "ProductCode": "MSIM",
+                "MajorMinorRevision": "1.0"
+            }
+        }
+
+
+class RegisterSizes(BaseModel):
+    co: int = 100
+    di: int = 100
+    hr: int = 100
+    ir: int = 100
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "co": 100,
+                "di": 100,
+                "hr": 100,
+                "ir": 100
+            }
+        }
+
+
 class ServerConfig(BaseModel):
-    ip: str
-    port: int
-    identity: dict  # Modbus identity as a dictionary
+    ip: str = "0.0.0.0"
+    port: int = 502
+    instances: int = 1
+    slaves: int = 1
+    identity: ModbusIdentity = ModbusIdentity()
+    register_sizes: RegisterSizes = RegisterSizes()
 
     class Config:
         json_schema_extra = {
             "example": {
                 "ip": "0.0.0.0",
                 "port": 502,
+                "instances": 2,
+                "slaves": 3,
                 "identity": {
-                    "VendorName": "ModbusSimulator",
-                    "ProductCode": "MSIM",
-                    "MajorMinorRevision": "1.0"
+                    "VendorName": "MySimulator",
+                    "ProductCode": "SIM1",
+                    "MajorMinorRevision": "2.0"
+                },
+                "register_sizes": {
+                    "co": 200,
+                    "di": 200,
+                    "hr": 500,
+                    "ir": 500
                 }
             }
         }
+
 
 class RegisterConfig(BaseModel):
     registers: list  # List of registers to configure
@@ -39,7 +83,8 @@ class RegisterConfig(BaseModel):
                         "server_id": 0,
                         "slave_id": 0,
                         "register_type": "all",
-                        "simulate": True
+                        "simulate": True,
+                        "simulation_mode": "random"
                     },
                     {
                         "server_id": 0,
@@ -47,14 +92,62 @@ class RegisterConfig(BaseModel):
                         "register_type": "hr",
                         "address": 0,
                         "address_end": 50,
-                        "simulate": True
+                        "simulate": True,
+                        "simulation_mode": "sine",
+                        "simulation_config": {
+                            "amplitude": 100,
+                            "offset": 200,
+                            "period": 60
+                        }
+                    },
+                    {
+                        "server_id": 0,
+                        "slave_id": 1,
+                        "register_type": "hr",
+                        "address": 100,
+                        "simulate": True,
+                        "simulation_mode": "equation",
+                        "simulation_config": {
+                            "equation": "sin(x / 10) * 100 + address"
+                        }
+                    },
+                    {
+                        "server_id": 0,
+                        "slave_id": 1,
+                        "register_type": "hr",
+                        "address": 200,
+                        "simulate": True,
+                        "simulation_mode": "ramp",
+                        "simulation_config": {
+                            "min": 0,
+                            "max": 100,
+                            "step": 5
+                        }
                     },
                     {
                         "server_id": 0,
                         "slave_id": 1,
                         "register_type": "co",
                         "register_size": 200,
-                        "simulate": True
+                        "simulate": True,
+                        "simulation_mode": "square",
+                        "simulation_config": {
+                            "high": 1,
+                            "low": 0,
+                            "period": 20,
+                            "duty_cycle": 0.5
+                        }
+                    },
+                    {
+                        "server_id": 0,
+                        "slave_id": 1,
+                        "register_type": "hr",
+                        "address": 300,
+                        "simulate": True,
+                        "simulation_mode": "static",
+                        "simulation_config": {
+                            "value": 42
+                        }
                     }
                 ]
             }
@@ -63,7 +156,7 @@ class RegisterConfig(BaseModel):
 class WebServer(threading.Thread):
     """Web interface Server"""
 
-    def __init__(self, port, database, modbus_servers, debug=False):
+    def __init__(self, port, database, modbus_servers, server_manager=None, debug=False):
         super().__init__()
         self._stop_event = threading.Event()
         self.app = FastAPI(
@@ -80,6 +173,7 @@ class WebServer(threading.Thread):
         self.daemon = True
         self.database = database
         self.modbus_servers = modbus_servers
+        self.server_manager = server_manager
         self.debug = debug
         self.port = port
 
@@ -138,39 +232,113 @@ class WebServer(threading.Thread):
         return self._stop_event.is_set()
 
     def configure_server_handler(self, config: ServerConfig):
+        """
+        Configure Modbus server instances and slaves.
+
+        This endpoint mimics the settings.json format, allowing you to specify:
+        - instances: Number of Modbus server instances to create
+        - slaves: Number of slaves per server instance
+        - ip: IP address to bind to
+        - port: Base port (each instance gets port + instance_id)
+        - identity: Modbus identity information
+        - register_sizes: Default register sizes for each type (co, di, hr, ir)
+        """
         try:
-            raise NotImplementedError("Configure server handler not implemented.")
-            self.database.save_settings({
-                "ip": config.ip,
-                "port": config.port,
-                "identity": config.identity
-            })
-            self.settings = self.database.get_settings()
-            self.restart_server()
-            return {"success": True, "message": "Server configuration updated and server restarted."}
+            # Expand the simple config into detailed server and slave configurations
+            servers = []
+            slaves = []
+
+            for server_id in range(config.instances):
+                servers.append({
+                    "server_id": server_id,
+                    "ip": config.ip,
+                    "port": config.port + server_id,
+                    "vendor_name": config.identity.VendorName,
+                    "product_code": config.identity.ProductCode,
+                    "version": config.identity.MajorMinorRevision
+                })
+
+                # Create slaves for this server
+                for slave_id in range(config.slaves):
+                    slaves.append({
+                        "server_id": server_id,
+                        "slave_id": slave_id,
+                        "co_size": config.register_sizes.co,
+                        "di_size": config.register_sizes.di,
+                        "hr_size": config.register_sizes.hr,
+                        "ir_size": config.register_sizes.ir
+                    })
+
+            # Validate and save configuration to database
+            result = self.database.save_server_config(servers, slaves)
+
+            if not result["success"]:
+                return {"success": False, "message": result["errors"]}
+
+            # Restart Modbus servers with new configuration
+            if self.server_manager:
+                self.server_manager.restart_modbus_servers()
+                return {
+                    "success": True,
+                    "message": f"Created {config.instances} server(s) with {config.slaves} slave(s) each. Modbus servers restarted."
+                }
+            else:
+                return {
+                    "success": True,
+                    "message": f"Configuration saved: {config.instances} server(s) with {config.slaves} slave(s) each. Restart application to apply changes."
+                }
+
         except Exception as e:
+            logger.error(f"Error configuring server: {e}")
             return {"success": False, "message": str(e)}
 
     def get_server_config_handler(self):
+        """
+        Get current server and slave configuration from database.
+
+        Returns the current configuration of all Modbus server instances and their slaves.
+        """
         try:
-            config = [s.getDetails() for s in self.modbus_servers.values()]
-            return {"success": True, "config": config}
+            servers = self.database.get_servers()
+            slaves = self.database.get_slaves()
+            return {
+                "success": True,
+                "servers": servers,
+                "slaves": slaves
+            }
         except Exception as e:
+            logger.error(f"Error getting server config: {e}")
             return {"success": False, "message": str(e)}
         
     def configure_registers_handler(self, config: RegisterConfig):
+        """
+        Configure register simulation settings.
+
+        Allows configuration of individual registers or ranges with various simulation modes:
+        - random: Random values within a range
+        - static: Fixed value
+        - sine: Sine wave pattern
+        - ramp: Linear ramp between min and max
+        - equation: Custom equation-based simulation
+        - square: Square wave (for coils/discrete inputs)
+        """
         try:
             # Save registers to the database
             result = self.database.save_registers(config.registers)
 
             if not result["success"]:
                 return {"success": False, "message": result["errors"]}
-            
+
             return {"success": True, "message": "Registers configured."}
         except Exception as e:
             return {"success": False, "message": str(e)}
 
     def get_registers_handler(self):
+        """
+        Get all configured register simulation settings.
+
+        Returns all register configurations currently stored in the database.
+        """
         try:
             registers = self.database.get_registers()
             if registers:
@@ -179,14 +347,15 @@ class WebServer(threading.Thread):
         except Exception as e:
             return {"success": False, "message": str(e)}
         
-    def get_context_handler(self, server_id: int):
+    def get_context_handler(self, server_id: int = Query(..., description="Server ID to get context for")):
+        """Get Modbus server context for a specific server instance."""
         try:
             self.modbus_server = self.modbus_servers.get(server_id)
             if not self.modbus_server:
                 return {"success": False, "message": "Server not found."}
-            
+
             context = self.modbus_server.get_context()
-            
+
             return {"success": True, "context": context}
         except Exception as e:
             return {"success": False, "message": str(e)}

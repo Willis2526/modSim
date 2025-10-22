@@ -15,33 +15,78 @@ class Server:
         self.signal_handler = SignalHandler()
         self.database = Database()
         self.settings_file = "settings.json"
-        
+
         # Load initial settings from JSON file or create defaults
         self.settings = self.load_settings()
 
-        # Start Modbus server
-        instanceNumber = 0
+        # Initialize database with default config if empty
+        self._initialize_database_from_settings()
+
+        # Start Modbus servers from database configuration
         self.modbus_servers = {}
+        self._start_modbus_servers()
 
-        while instanceNumber < self.settings["modbus"]["instances"]:
-            port = self.settings["modbus"]["port"] + instanceNumber
-            self.modbus_servers[instanceNumber] = ModbusServer(
-                instanceNumber,
-                self.settings["modbus"]["ip"],
-                port,
-                self.settings["modbus"]["identity"],
-                self.settings["modbus"]["slaves"],
-                self.settings["modbus"]["registers"],
-                self.settings["modbus"].get("register_sizes")
-            )
-            self.modbus_servers[instanceNumber].start()
-            instanceNumber += 1
+        # Start the web server
+        self.web_server = WebServer(
+            self.settings["web"]["port"],
+            database=self.database,
+            modbus_servers=self.modbus_servers,
+            server_manager=self
+        )
+        self.web_server.start()
 
-        if self.settings["modbus"].get("config"):
-            if self.settings["modbus"]["config"].get("registers"):
+    def _initialize_database_from_settings(self):
+        """Initialize database with default configuration from settings.json if database is empty"""
+        servers = self.database.get_servers()
+
+        # If database is empty, populate from settings.json
+        if not servers:
+            logger.info("Database empty, initializing from settings.json")
+
+            # Create server configurations
+            default_servers = []
+            default_slaves = []
+            default_registers = []
+
+            instances = self.settings["modbus"].get("instances", 1)
+            base_port = self.settings["modbus"].get("port", 502)
+            ip = self.settings["modbus"].get("ip", "0.0.0.0")
+            identity = self.settings["modbus"].get("identity", {})
+            num_slaves = self.settings["modbus"].get("slaves", 1)
+            register_sizes = self.settings["modbus"].get("register_sizes", {})
+
+            for server_id in range(instances):
+                default_servers.append({
+                    "server_id": server_id,
+                    "ip": ip,
+                    "port": base_port + server_id,
+                    "vendor_name": identity.get("VendorName", "ModbusSimulator"),
+                    "product_code": identity.get("ProductCode", "MSIM"),
+                    "version": identity.get("MajorMinorRevision", "1.0")
+                })
+
+                # Create slaves for this server
+                for slave_id in range(num_slaves):
+                    default_slaves.append({
+                        "server_id": server_id,
+                        "slave_id": slave_id,
+                        "co_size": register_sizes.get("co", 100),
+                        "di_size": register_sizes.get("di", 100),
+                        "hr_size": register_sizes.get("hr", 100),
+                        "ir_size": register_sizes.get("ir", 100)
+                    })
+
+            # Save server and slave configuration
+            result = self.database.save_server_config(default_servers, default_slaves)
+            if not result["success"]:
+                logger.error(f"Failed to save server config: {result['errors']}")
+            else:
+                logger.debug("Server configuration saved to database")
+
+            # Handle register configuration from settings
+            if self.settings["modbus"].get("config", {}).get("registers"):
                 try:
                     # Expand register configs that don't have server_id to all servers
-                    # First, collect all server_ids that have explicit configs
                     explicit_server_ids = set()
                     explicit_configs = []
                     default_configs = []
@@ -56,29 +101,71 @@ class Server:
                     # Apply default configs to servers that don't have explicit configs
                     expanded_registers = explicit_configs.copy()
                     for reg_config in default_configs:
-                        for server_id in range(self.settings["modbus"]["instances"]):
+                        for server_id in range(instances):
                             if server_id not in explicit_server_ids:
                                 expanded_config = reg_config.copy()
                                 expanded_config["server_id"] = server_id
                                 expanded_registers.append(expanded_config)
 
                     result = self.database.save_registers(expanded_registers)
-
                     if not result["success"]:
-                        logger.error("Failed to config registers: {}".format(result["errors"]))
+                        logger.error(f"Failed to config registers: {result['errors']}")
                     else:
                         logger.debug("Registers configured successfully.")
-
                 except Exception as e:
-                    logger.error("Error configuring registers: {}".format(str(e)))
+                    logger.error(f"Error configuring registers: {str(e)}")
 
-        # Start the web server
-        self.web_server = WebServer(
-            self.settings["web"]["port"],
-            database=self.database,
-            modbus_servers=self.modbus_servers,
-        )
-        self.web_server.start()
+    def _start_modbus_servers(self):
+        """Start Modbus servers based on database configuration"""
+        servers = self.database.get_servers()
+
+        for server_config in servers:
+            server_id = server_config["server_id"]
+            slaves = self.database.get_slaves(server_id)
+
+            # Build register_sizes dict from first slave (assuming all slaves have same sizes)
+            register_sizes = None
+            if slaves:
+                first_slave = slaves[0]
+                register_sizes = {
+                    "co": first_slave["co_size"],
+                    "di": first_slave["di_size"],
+                    "hr": first_slave["hr_size"],
+                    "ir": first_slave["ir_size"]
+                }
+
+            identity = {
+                "VendorName": server_config["vendor_name"],
+                "ProductCode": server_config["product_code"],
+                "MajorMinorRevision": server_config["version"]
+            }
+
+            self.modbus_servers[server_id] = ModbusServer(
+                server_id,
+                server_config["ip"],
+                server_config["port"],
+                identity,
+                len(slaves),  # number of slaves
+                100,  # deprecated registers parameter (kept for compatibility)
+                register_sizes
+            )
+            self.modbus_servers[server_id].start()
+            logger.info(f"Started Modbus server {server_id} on {server_config['ip']}:{server_config['port']} with {len(slaves)} slave(s)")
+
+    def restart_modbus_servers(self):
+        """Stop and restart all Modbus servers with current database configuration"""
+        logger.info("Restarting Modbus servers...")
+
+        # Stop existing servers
+        for server in self.modbus_servers.values():
+            server.stop()
+
+        self.modbus_servers.clear()
+
+        # Start servers with new configuration
+        self._start_modbus_servers()
+
+        logger.info("Modbus servers restarted successfully")
 
     def load_settings(self):
         """

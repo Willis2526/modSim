@@ -11,6 +11,7 @@ from pymodbus.datastore import (
     ModbusDeviceContext,
 )
 from pymodbus.server import StartTcpServer
+from modSim.simulator import SimulationEngine
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +73,9 @@ class Server(threading.Thread):
             "di": 2,
             "ir": 4
         }
+
+        # Initialize simulation engine
+        self.simulation_engine = SimulationEngine()
 
         # Build the context
         self.context = buildModbusContext(numberOfSlaves, self.registerSizes)
@@ -185,7 +189,7 @@ class Server(threading.Thread):
         return self.running
 
     def simulate(self, registers):
-        """Simulate registers with random values.
+        """Simulate registers with configurable simulation modes.
 
         Each item in `registers` is expected to be a dict with keys like:
         {
@@ -195,7 +199,9 @@ class Server(threading.Thread):
             "address": <int>,
             "address_end": <int|None>,  # Optional: end address for range
             "register_size": <int|None>,  # Optional: override register size
-            "simulate": <bool>
+            "simulate": <bool>,
+            "simulation_mode": <str>,  # random, static, equation, ramp, sine, square
+            "simulation_config": <dict>  # Mode-specific configuration
         }
         """
         # Map: name -> Modbus function-code group
@@ -221,21 +227,34 @@ class Server(threading.Thread):
                                reg_type_key)
                 continue
 
+            # Get simulation mode and config
+            simulation_mode = reg.get("simulation_mode", "random")
+            simulation_config = reg.get("simulation_config", {})
+
             # Get register size (use override if provided, otherwise use configured size)
             register_size_override = reg.get("register_size")
 
-            # Helper to generate a block of values
-            def _gen_block(kind, count):
-                if kind in ("di", "co"):
-                    return [random.choice([True, False]) for _ in range(count)]
-                return [random.randrange(0, 500) for _ in range(count)]
+            # Helper to generate a block of values using simulation engine
+            def _gen_block(kind, count, start_addr=0):
+                values = []
+                for i in range(count):
+                    value = self.simulation_engine.generate_value(
+                        simulation_mode,
+                        simulation_config,
+                        kind,
+                        start_addr + i,
+                        slave_id,
+                        self.serverId
+                    )
+                    values.append(value)
+                return values
 
             # Write a full block for the given kind
             def _write_full(kind):
                 code = register_type_map[kind]
                 # Use override size if provided, otherwise use configured size for this type
                 size = register_size_override if register_size_override is not None else self.registerSizes.get(kind, self.numberOfRegisters)
-                values = _gen_block(kind, size)
+                values = _gen_block(kind, size, 0)
                 self.context[slave_id].setValues(code, 0, values)
 
             # Handle "all" by writing every kind
@@ -257,7 +276,7 @@ class Server(threading.Thread):
                 addr_end = int(addr_end)
                 if 0 <= addr_start < max_size and 0 <= addr_end < max_size and addr_start <= addr_end:
                     count = addr_end - addr_start + 1
-                    values = _gen_block(reg_type_key, count)
+                    values = _gen_block(reg_type_key, count, addr_start)
                     self.context[slave_id].setValues(reg_type_code, addr_start, values)
                 else:
                     logger.warning(
@@ -270,7 +289,14 @@ class Server(threading.Thread):
                     )
             # Handle single address simulation
             elif 0 <= addr_start < max_size:
-                value = (_gen_block(reg_type_key, 1)[0])
+                value = self.simulation_engine.generate_value(
+                    simulation_mode,
+                    simulation_config,
+                    reg_type_key,
+                    addr_start,
+                    slave_id,
+                    self.serverId
+                )
                 self.context[slave_id].setValues(reg_type_code, addr_start, [value])
             else:
                 logger.warning(
