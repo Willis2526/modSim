@@ -2,6 +2,7 @@ import argparse
 from pydantic import BaseModel
 import logging
 import threading
+from typing import Union
 
 import uvicorn
 from fastapi import FastAPI, Query
@@ -153,6 +154,87 @@ class RegisterConfig(BaseModel):
             }
         }
 
+
+class ServerItem(BaseModel):
+    server_id: int
+    ip: str
+    port: int
+    vendor_name: str = "ModbusSimulator"
+    product_code: str = "MSIM"
+    version: str = "1.0"
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "server_id": 0,
+                "ip": "0.0.0.0",
+                "port": 502,
+                "vendor_name": "ModbusSimulator",
+                "product_code": "MSIM",
+                "version": "1.0"
+            }
+        }
+
+
+class SlaveItem(BaseModel):
+    server_id: int
+    slave_id: int
+    co_size: int = 100
+    di_size: int = 100
+    hr_size: int = 100
+    ir_size: int = 100
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "server_id": 0,
+                "slave_id": 0,
+                "co_size": 1000,
+                "di_size": 1000,
+                "hr_size": 1000,
+                "ir_size": 1000
+            }
+        }
+
+
+class DetailedServerConfig(BaseModel):
+    servers: list[ServerItem]
+    slaves: list[SlaveItem]
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "servers": [
+                    {
+                        "server_id": 0,
+                        "ip": "0.0.0.0",
+                        "port": 502,
+                        "vendor_name": "ModbusSimulator",
+                        "product_code": "MSIM",
+                        "version": "1.0"
+                    }
+                ],
+                "slaves": [
+                    {
+                        "server_id": 0,
+                        "slave_id": 0,
+                        "co_size": 1000,
+                        "di_size": 1000,
+                        "hr_size": 1000,
+                        "ir_size": 1000
+                    },
+                    {
+                        "server_id": 0,
+                        "slave_id": 1,
+                        "co_size": 1000,
+                        "di_size": 1000,
+                        "hr_size": 1000,
+                        "ir_size": 1000
+                    }
+                ]
+            }
+        }
+
 class WebServer(threading.Thread):
     """Web interface Server"""
 
@@ -231,43 +313,55 @@ class WebServer(threading.Thread):
         """Returns true when stop is called"""
         return self._stop_event.is_set()
 
-    def configure_server_handler(self, config: ServerConfig):
+    def configure_server_handler(self, config: Union[ServerConfig, DetailedServerConfig]):
         """
         Configure Modbus server instances and slaves.
 
-        This endpoint mimics the settings.json format, allowing you to specify:
-        - instances: Number of Modbus server instances to create
-        - slaves: Number of slaves per server instance
-        - ip: IP address to bind to
-        - port: Base port (each instance gets port + instance_id)
-        - identity: Modbus identity information
-        - register_sizes: Default register sizes for each type (co, di, hr, ir)
+        This endpoint accepts two formats:
+
+        1. Simplified format (settings.json style):
+           - instances: Number of Modbus server instances to create
+           - slaves: Number of slaves per server instance
+           - ip: IP address to bind to
+           - port: Base port (each instance gets port + instance_id)
+           - identity: Modbus identity information
+           - register_sizes: Default register sizes for each type (co, di, hr, ir)
+
+        2. Detailed format (same as get-server-config returns):
+           - servers: List of server configurations with individual settings
+           - slaves: List of slave configurations with individual register sizes
         """
         try:
-            # Expand the simple config into detailed server and slave configurations
-            servers = []
-            slaves = []
+            # Check which format was provided
+            if isinstance(config, DetailedServerConfig):
+                # Detailed format: convert Pydantic models to dictionaries
+                servers = [server.model_dump() for server in config.servers]
+                slaves = [slave.model_dump() for slave in config.slaves]
+            else:
+                # Simplified format: expand into detailed server and slave configurations
+                servers = []
+                slaves = []
 
-            for server_id in range(config.instances):
-                servers.append({
-                    "server_id": server_id,
-                    "ip": config.ip,
-                    "port": config.port + server_id,
-                    "vendor_name": config.identity.VendorName,
-                    "product_code": config.identity.ProductCode,
-                    "version": config.identity.MajorMinorRevision
-                })
-
-                # Create slaves for this server
-                for slave_id in range(config.slaves):
-                    slaves.append({
+                for server_id in range(config.instances):
+                    servers.append({
                         "server_id": server_id,
-                        "slave_id": slave_id,
-                        "co_size": config.register_sizes.co,
-                        "di_size": config.register_sizes.di,
-                        "hr_size": config.register_sizes.hr,
-                        "ir_size": config.register_sizes.ir
+                        "ip": config.ip,
+                        "port": config.port + server_id,
+                        "vendor_name": config.identity.VendorName,
+                        "product_code": config.identity.ProductCode,
+                        "version": config.identity.MajorMinorRevision
                     })
+
+                    # Create slaves for this server
+                    for slave_id in range(config.slaves):
+                        slaves.append({
+                            "server_id": server_id,
+                            "slave_id": slave_id,
+                            "co_size": config.register_sizes.co,
+                            "di_size": config.register_sizes.di,
+                            "hr_size": config.register_sizes.hr,
+                            "ir_size": config.register_sizes.ir
+                        })
 
             # Validate and save configuration to database
             result = self.database.save_server_config(servers, slaves)
@@ -278,15 +372,27 @@ class WebServer(threading.Thread):
             # Restart Modbus servers with new configuration
             if self.server_manager:
                 self.server_manager.restart_modbus_servers()
-                return {
-                    "success": True,
-                    "message": f"Created {config.instances} server(s) with {config.slaves} slave(s) each. Modbus servers restarted."
-                }
+                if isinstance(config, DetailedServerConfig):
+                    return {
+                        "success": True,
+                        "message": f"Configuration updated: {len(servers)} server(s) with {len(slaves)} slave(s). Modbus servers restarted."
+                    }
+                else:
+                    return {
+                        "success": True,
+                        "message": f"Created {config.instances} server(s) with {config.slaves} slave(s) each. Modbus servers restarted."
+                    }
             else:
-                return {
-                    "success": True,
-                    "message": f"Configuration saved: {config.instances} server(s) with {config.slaves} slave(s) each. Restart application to apply changes."
-                }
+                if isinstance(config, DetailedServerConfig):
+                    return {
+                        "success": True,
+                        "message": f"Configuration saved: {len(servers)} server(s) with {len(slaves)} slave(s). Restart application to apply changes."
+                    }
+                else:
+                    return {
+                        "success": True,
+                        "message": f"Configuration saved: {config.instances} server(s) with {config.slaves} slave(s) each. Restart application to apply changes."
+                    }
 
         except Exception as e:
             logger.error(f"Error configuring server: {e}")
@@ -309,7 +415,7 @@ class WebServer(threading.Thread):
         except Exception as e:
             logger.error(f"Error getting server config: {e}")
             return {"success": False, "message": str(e)}
-        
+
     def configure_registers_handler(self, config: RegisterConfig):
         """
         Configure register simulation settings.

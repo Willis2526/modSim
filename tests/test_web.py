@@ -643,3 +643,275 @@ class TestWebServerEndpoints:
         assert len(data["registers"]) == 1
         assert data["registers"][0]["slave_id"] == 1
         assert data["registers"][0]["address"] == 200
+
+    def test_configure_server_detailed_format(self, client):
+        """Test configure-server endpoint with detailed configuration format"""
+        detailed_config = {
+            "servers": [
+                {
+                    "server_id": 0,
+                    "ip": "0.0.0.0",
+                    "port": 502,
+                    "vendor_name": "ModbusSimulator",
+                    "product_code": "MSIM",
+                    "version": "1.0"
+                }
+            ],
+            "slaves": [
+                {
+                    "server_id": 0,
+                    "slave_id": 0,
+                    "co_size": 1000,
+                    "di_size": 1000,
+                    "hr_size": 1000,
+                    "ir_size": 1000
+                }
+            ]
+        }
+
+        response = client.post("/configure-server", json=detailed_config)
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["success"] is True
+        assert "1 server(s) with 1 slave(s)" in data["message"]
+
+    def test_configure_server_detailed_multiple_slaves_different_sizes(self, client):
+        """Test configure-server with detailed format having multiple slaves with different register sizes"""
+        detailed_config = {
+            "servers": [
+                {
+                    "server_id": 0,
+                    "ip": "0.0.0.0",
+                    "port": 502,
+                    "vendor_name": "ModbusSimulator",
+                    "product_code": "MSIM",
+                    "version": "1.0"
+                }
+            ],
+            "slaves": [
+                {
+                    "server_id": 0,
+                    "slave_id": 0,
+                    "co_size": 1000,
+                    "di_size": 1000,
+                    "hr_size": 1000,
+                    "ir_size": 1000
+                },
+                {
+                    "server_id": 0,
+                    "slave_id": 1,
+                    "co_size": 2000,
+                    "di_size": 2000,
+                    "hr_size": 2000,
+                    "ir_size": 2000
+                },
+                {
+                    "server_id": 0,
+                    "slave_id": 2,
+                    "co_size": 500,
+                    "di_size": 500,
+                    "hr_size": 500,
+                    "ir_size": 500
+                }
+            ]
+        }
+
+        response = client.post("/configure-server", json=detailed_config)
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["success"] is True
+
+        # Verify configuration was saved with different sizes
+        response = client.get("/get-server-config")
+        data = response.json()
+        assert data["success"] is True
+        assert len(data["servers"]) == 1
+        assert len(data["slaves"]) == 3
+        assert data["slaves"][0]["co_size"] == 1000
+        assert data["slaves"][1]["co_size"] == 2000
+        assert data["slaves"][2]["co_size"] == 500
+
+    def test_configure_server_detailed_multiple_servers(self, client):
+        """Test configure-server with detailed format having multiple servers and different configurations"""
+        detailed_config = {
+            "servers": [
+                {
+                    "server_id": 0,
+                    "ip": "0.0.0.0",
+                    "port": 502,
+                    "vendor_name": "VendorA",
+                    "product_code": "PROD_A",
+                    "version": "1.0"
+                },
+                {
+                    "server_id": 1,
+                    "ip": "127.0.0.1",
+                    "port": 503,
+                    "vendor_name": "VendorB",
+                    "product_code": "PROD_B",
+                    "version": "2.0"
+                }
+            ],
+            "slaves": [
+                {
+                    "server_id": 0,
+                    "slave_id": 0,
+                    "co_size": 100,
+                    "di_size": 100,
+                    "hr_size": 100,
+                    "ir_size": 100
+                },
+                {
+                    "server_id": 1,
+                    "slave_id": 0,
+                    "co_size": 200,
+                    "di_size": 200,
+                    "hr_size": 200,
+                    "ir_size": 200
+                }
+            ]
+        }
+
+        response = client.post("/configure-server", json=detailed_config)
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["success"] is True
+        assert "2 server(s) with 2 slave(s)" in data["message"]
+
+        # Verify configuration was saved
+        response = client.get("/get-server-config")
+        data = response.json()
+        assert data["success"] is True
+        assert len(data["servers"]) == 2
+        assert len(data["slaves"]) == 2
+        assert data["servers"][0]["vendor_name"] == "VendorA"
+        assert data["servers"][1]["vendor_name"] == "VendorB"
+
+    def test_configure_server_get_modify_configure_workflow(self, client):
+        """Test the workflow: get-server-config, modify, then configure-server with detailed format"""
+        # First, configure initial setup using simplified format
+        server_config = {
+            "ip": "0.0.0.0",
+            "port": 502,
+            "instances": 1,
+            "slaves": 3,
+            "identity": {
+                "VendorName": "InitialVendor",
+                "ProductCode": "INIT",
+                "MajorMinorRevision": "1.0"
+            },
+            "register_sizes": {
+                "co": 100,
+                "di": 100,
+                "hr": 100,
+                "ir": 100
+            }
+        }
+        client.post("/configure-server", json=server_config)
+
+        # Get current configuration
+        response = client.get("/get-server-config")
+        current_config = response.json()
+        assert current_config["success"] is True
+
+        # Modify the configuration: increase register sizes for slave_id 1 only
+        for slave in current_config["slaves"]:
+            if slave["slave_id"] == 1:
+                slave["co_size"] = 5000
+                slave["di_size"] = 5000
+                slave["hr_size"] = 5000
+                slave["ir_size"] = 5000
+
+        # Set the modified configuration using detailed format
+        detailed_config = {
+            "servers": current_config["servers"],
+            "slaves": current_config["slaves"]
+        }
+        response = client.post("/configure-server", json=detailed_config)
+        assert response.status_code == 200
+
+        data = response.json()
+        assert data["success"] is True
+
+        # Verify the modification was applied
+        response = client.get("/get-server-config")
+        data = response.json()
+        assert data["success"] is True
+        assert len(data["slaves"]) == 3
+        assert data["slaves"][0]["co_size"] == 100  # slave_id 0 unchanged
+        assert data["slaves"][1]["co_size"] == 5000  # slave_id 1 modified
+        assert data["slaves"][2]["co_size"] == 100  # slave_id 2 unchanged
+
+    def test_configure_server_detailed_replaces_existing(self, client):
+        """Test that configure-server with detailed format replaces existing configuration"""
+        # First configuration
+        config1 = {
+            "servers": [
+                {
+                    "server_id": 0,
+                    "ip": "0.0.0.0",
+                    "port": 502,
+                    "vendor_name": "Vendor1",
+                    "product_code": "V1",
+                    "version": "1.0"
+                }
+            ],
+            "slaves": [
+                {
+                    "server_id": 0,
+                    "slave_id": 0,
+                    "co_size": 100,
+                    "di_size": 100,
+                    "hr_size": 100,
+                    "ir_size": 100
+                }
+            ]
+        }
+        client.post("/configure-server", json=config1)
+
+        # Second configuration (completely different)
+        config2 = {
+            "servers": [
+                {
+                    "server_id": 0,
+                    "ip": "127.0.0.1",
+                    "port": 503,
+                    "vendor_name": "Vendor2",
+                    "product_code": "V2",
+                    "version": "2.0"
+                }
+            ],
+            "slaves": [
+                {
+                    "server_id": 0,
+                    "slave_id": 0,
+                    "co_size": 2000,
+                    "di_size": 2000,
+                    "hr_size": 2000,
+                    "ir_size": 2000
+                },
+                {
+                    "server_id": 0,
+                    "slave_id": 1,
+                    "co_size": 3000,
+                    "di_size": 3000,
+                    "hr_size": 3000,
+                    "ir_size": 3000
+                }
+            ]
+        }
+        client.post("/configure-server", json=config2)
+
+        # Verify only second configuration exists
+        response = client.get("/get-server-config")
+        data = response.json()
+        assert len(data["servers"]) == 1
+        assert data["servers"][0]["ip"] == "127.0.0.1"
+        assert data["servers"][0]["port"] == 503
+        assert data["servers"][0]["vendor_name"] == "Vendor2"
+        assert len(data["slaves"]) == 2
+        assert data["slaves"][0]["co_size"] == 2000
+        assert data["slaves"][1]["co_size"] == 3000

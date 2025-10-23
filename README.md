@@ -154,6 +154,48 @@ The server can be configured over a REST API located at **http://server_address:
 - **POST /configure-server**
   Configure Modbus server instances and slaves. This dynamically updates the running configuration and restarts all Modbus servers.
 
+  **This endpoint supports two configuration formats:**
+
+  #### Format 1: Simplified Configuration (settings.json style)
+  This simplified format is ideal for quick setup when all servers have the same identity and all slaves have the same register sizes.
+
+  **Parameters:**
+  - `ip`: IP address to bind to (default: "0.0.0.0")
+  - `port`: Base port number (each instance gets port + instance_id)
+  - `instances`: Number of Modbus server instances to create
+  - `slaves`: Number of slaves per server instance
+  - `identity`: Modbus identity information (VendorName, ProductCode, MajorMinorRevision)
+  - `register_sizes`: Default register sizes for each type (co, di, hr, ir)
+
+  Example - Create 2 servers with 3 slaves each:
+  ```json
+  {
+    "ip": "0.0.0.0",
+    "port": 502,
+    "instances": 2,
+    "slaves": 3,
+    "identity": {
+      "VendorName": "MySimulator",
+      "ProductCode": "SIM1",
+      "MajorMinorRevision": "2.0"
+    },
+    "register_sizes": {
+      "co": 200,
+      "di": 200,
+      "hr": 500,
+      "ir": 500
+    }
+  }
+  ```
+
+  This will create:
+  - Server 0 on port 502 with slaves 0, 1, 2
+  - Server 1 on port 503 with slaves 0, 1, 2
+  - All slaves have register sizes: co=200, di=200, hr=500, ir=500
+
+  #### Format 2: Detailed Configuration
+  This format provides full control over individual server and slave configurations, allowing different settings for each.
+
   Example - Single server with one slave:
   ```json
   {
@@ -180,7 +222,7 @@ The server can be configured over a REST API located at **http://server_address:
   }
   ```
 
-  Example - Multiple servers with multiple slaves:
+  Example - Multiple servers with different configurations:
   ```json
   {
     "servers": [
@@ -197,8 +239,8 @@ The server can be configured over a REST API located at **http://server_address:
         "ip": "0.0.0.0",
         "port": 503,
         "vendor_name": "ModbusSimulator2",
-        "product_code": "MSIM",
-        "version": "1.0"
+        "product_code": "MSIM2",
+        "version": "2.0"
       }
     ],
     "slaves": [
