@@ -84,19 +84,23 @@ class Database:
             conn = self._get_connection()
             try:
                 cursor = conn.cursor()
-                cursor.execute("SELECT server_id, slave_id, register_type, address, address_end, register_size, simulate, simulation_mode, simulation_config FROM registers")
+                cursor.execute(
+                    "SELECT id, server_id, slave_id, register_type, address, address_end, "
+                    "register_size, simulate, simulation_mode, simulation_config FROM registers"
+                )
                 results = cursor.fetchall()
                 return [
                     {
-                        "server_id": row[0],
-                        "slave_id": row[1],
-                        "register_type": row[2],
-                        "address": row[3],
-                        "address_end": row[4],
-                        "register_size": row[5],
-                        "simulate": bool(row[6]),
-                        "simulation_mode": row[7] if row[7] else "random",
-                        "simulation_config": json.loads(row[8]) if row[8] else {}
+                        "id": row[0],
+                        "server_id": row[1],
+                        "slave_id": row[2],
+                        "register_type": row[3],
+                        "address": row[4],
+                        "address_end": row[5],
+                        "register_size": row[6],
+                        "simulate": bool(row[7]),
+                        "simulation_mode": row[8] if row[8] else "random",
+                        "simulation_config": json.loads(row[9]) if row[9] else {}
                     }
                     for row in results
                 ]
@@ -105,6 +109,185 @@ class Database:
         except sqlite3.Error as e:
             logger.error(f"Error fetching registers: {e}")
             return []
+
+    def add_register(self, rule: dict) -> dict:
+        """Insert a single register rule. Returns {"success": bool, "id": int|None, "errors": list}"""
+        errors = []
+        slave_id = rule.get("slave_id")
+        register_type = rule.get("register_type")
+        if slave_id is None:
+            errors.append("Missing slave_id")
+        if not register_type:
+            errors.append("Missing register_type")
+        if errors:
+            return {"success": False, "id": None, "errors": errors}
+        try:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                sim_config = rule.get("simulation_config") or {}
+                cursor.execute(
+                    """INSERT INTO registers
+                       (server_id, slave_id, register_type, address, address_end,
+                        register_size, simulate, simulation_mode, simulation_config)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        rule.get("server_id", None),
+                        slave_id,
+                        register_type,
+                        rule.get("address", 0),
+                        rule.get("address_end", None),
+                        rule.get("register_size", None),
+                        int(rule.get("simulate", False)),
+                        rule.get("simulation_mode", "random"),
+                        json.dumps(sim_config),
+                    )
+                )
+                new_id = cursor.lastrowid
+                conn.commit()
+                return {"success": True, "id": new_id, "errors": []}
+            finally:
+                conn.close()
+        except sqlite3.Error as e:
+            logger.error(f"Error adding register: {e}")
+            return {"success": False, "id": None, "errors": [str(e)]}
+
+    def update_register(self, rule_id: int, rule: dict) -> dict:
+        """Update an existing register rule by its primary key id."""
+        errors = []
+        slave_id = rule.get("slave_id")
+        register_type = rule.get("register_type")
+        if slave_id is None:
+            errors.append("Missing slave_id")
+        if not register_type:
+            errors.append("Missing register_type")
+        if errors:
+            return {"success": False, "updated": False, "errors": errors}
+        try:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                sim_config = rule.get("simulation_config") or {}
+                cursor.execute(
+                    """UPDATE registers SET
+                       server_id=?, slave_id=?, register_type=?, address=?, address_end=?,
+                       register_size=?, simulate=?, simulation_mode=?, simulation_config=?
+                       WHERE id=?""",
+                    (
+                        rule.get("server_id", None),
+                        slave_id,
+                        register_type,
+                        rule.get("address", 0),
+                        rule.get("address_end", None),
+                        rule.get("register_size", None),
+                        int(rule.get("simulate", False)),
+                        rule.get("simulation_mode", "random"),
+                        json.dumps(sim_config),
+                        rule_id,
+                    )
+                )
+                conn.commit()
+                return {"success": True, "updated": cursor.rowcount > 0, "errors": []}
+            finally:
+                conn.close()
+        except sqlite3.Error as e:
+            logger.error(f"Error updating register {rule_id}: {e}")
+            return {"success": False, "updated": False, "errors": [str(e)]}
+
+    def delete_register(self, rule_id: int) -> dict:
+        """Delete one register rule by its primary key id."""
+        try:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM registers WHERE id = ?", (rule_id,))
+                conn.commit()
+                return {"success": True, "deleted": cursor.rowcount > 0, "errors": []}
+            finally:
+                conn.close()
+        except sqlite3.Error as e:
+            logger.error(f"Error deleting register {rule_id}: {e}")
+            return {"success": False, "deleted": False, "errors": [str(e)]}
+
+    def upsert_server(self, server: dict) -> dict:
+        """Insert or replace one server row."""
+        server_id = server.get("server_id")
+        port = server.get("port")
+        if server_id is None:
+            return {"success": False, "errors": ["Missing server_id"]}
+        if port is None:
+            return {"success": False, "errors": ["Missing port"]}
+        try:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """INSERT OR REPLACE INTO servers
+                       (server_id, ip, port, vendor_name, product_code, version)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (
+                        server_id,
+                        server.get("ip", "0.0.0.0"),
+                        port,
+                        server.get("vendor_name", "ModbusSimulator"),
+                        server.get("product_code", "MSIM"),
+                        server.get("version", "1.0"),
+                    )
+                )
+                conn.commit()
+                return {"success": True, "errors": []}
+            finally:
+                conn.close()
+        except sqlite3.Error as e:
+            logger.error(f"Error upserting server {server_id}: {e}")
+            return {"success": False, "errors": [str(e)]}
+
+    def upsert_slave(self, slave: dict) -> dict:
+        """Insert or replace one slave row."""
+        server_id = slave.get("server_id")
+        slave_id = slave.get("slave_id")
+        if server_id is None:
+            return {"success": False, "errors": ["Missing server_id"]}
+        if slave_id is None:
+            return {"success": False, "errors": ["Missing slave_id"]}
+        try:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """INSERT OR REPLACE INTO slaves
+                       (server_id, slave_id, co_size, di_size, hr_size, ir_size)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (
+                        server_id, slave_id,
+                        slave.get("co_size", 100),
+                        slave.get("di_size", 100),
+                        slave.get("hr_size", 100),
+                        slave.get("ir_size", 100),
+                    )
+                )
+                conn.commit()
+                return {"success": True, "errors": []}
+            finally:
+                conn.close()
+        except sqlite3.Error as e:
+            logger.error(f"Error upserting slave {server_id}/{slave_id}: {e}")
+            return {"success": False, "errors": [str(e)]}
+
+    def delete_server(self, server_id: int) -> dict:
+        """Delete a server and its slaves (CASCADE). Register rules with this server_id remain."""
+        try:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM servers WHERE server_id = ?", (server_id,))
+                conn.commit()
+                return {"success": True, "deleted": cursor.rowcount > 0, "errors": []}
+            finally:
+                conn.close()
+        except sqlite3.Error as e:
+            logger.error(f"Error deleting server {server_id}: {e}")
+            return {"success": False, "deleted": False, "errors": [str(e)]}
 
     def save_registers(self, registers):
         try:

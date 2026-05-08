@@ -1,15 +1,25 @@
 import argparse
+from pathlib import Path
 from pydantic import BaseModel
 import logging
 import threading
-from typing import Union
+from typing import Optional, Union
 
 import uvicorn
 from fastapi import FastAPI, Query
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 logger = logging.getLogger(__name__)
 
+_PACKAGE_DIR = Path(__file__).parent
+_TEMPLATES_DIR = _PACKAGE_DIR / "templates"
+_STATIC_DIR = _PACKAGE_DIR / "static"
+
 logging.getLogger("asyncio").setLevel(logging.WARNING)
+
+
+# ── Pydantic models ────────────────────────────────────────────────────────────
 
 class ModbusIdentity(BaseModel):
     VendorName: str = "ModbusSimulator"
@@ -197,6 +207,59 @@ class SlaveItem(BaseModel):
         }
 
 
+class SingleRegisterRule(BaseModel):
+    server_id: Optional[int] = None
+    slave_id: int
+    register_type: str
+    address: int = 0
+    address_end: Optional[int] = None
+    register_size: Optional[int] = None
+    simulate: bool = False
+    simulation_mode: str = "random"
+    simulation_config: dict = {}
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "server_id": 0,
+                "slave_id": 1,
+                "register_type": "ir",
+                "address": 100,
+                "address_end": 109,
+                "simulate": True,
+                "simulation_mode": "sine",
+                "simulation_config": {"amplitude": 500, "offset": 3000, "period": 7200}
+            }
+        }
+
+
+class ImportPayload(BaseModel):
+    servers: list = []
+    slaves: list = []
+    registers: list = []
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "servers": [
+                    {"server_id": 0, "ip": "0.0.0.0", "port": 502,
+                     "vendor_name": "Acme", "product_code": "SIM1", "version": "1.0"}
+                ],
+                "slaves": [
+                    {"server_id": 0, "slave_id": 0, "co_size": 100, "di_size": 100,
+                     "hr_size": 100, "ir_size": 200},
+                    {"server_id": 0, "slave_id": 1, "co_size": 100, "di_size": 100,
+                     "hr_size": 100, "ir_size": 200}
+                ],
+                "registers": [
+                    {"slave_id": 1, "register_type": "hr", "address": 100,
+                     "simulate": True, "simulation_mode": "sine",
+                     "simulation_config": {"amplitude": 100, "offset": 500, "period": 3600}}
+                ]
+            }
+        }
+
+
 class DetailedServerConfig(BaseModel):
     servers: list[ServerItem]
     slaves: list[SlaveItem]
@@ -235,6 +298,11 @@ class DetailedServerConfig(BaseModel):
             }
         }
 
+
+
+
+# ── Web server ─────────────────────────────────────────────────────────────────
+
 class WebServer(threading.Thread):
     """Web interface Server"""
 
@@ -243,14 +311,46 @@ class WebServer(threading.Thread):
         self._stop_event = threading.Event()
         self.app = FastAPI(
             title="modSim",
-            description="A configurable modbus simulator.",
-            version="0.0.1",
+            description=(
+                "A configurable Modbus TCP simulator with a browser-based UI and REST API.\n\n"
+                "**Endpoint groups**\n"
+                "- **Servers** — create, inspect, and delete Modbus server instances and their slave configurations\n"
+                "- **Register Rules** — configure per-address simulation rules (add, update, delete individually or in bulk)\n"
+                "- **Live Data** — read current register values and running-server status\n"
+                "- **Import / Export** — backup and restore the full configuration as a single JSON file\n"
+                "- **System** — restart the Modbus servers without restarting the process\n\n"
+                "Interactive UI is served at **/**. "
+                "Simulation modes: `random`, `static`, `sine`, `ramp`, `square`, `equation`."
+            ),
+            version="1.0.0",
             license_info={
                 "name": "Apache 2.0",
                 "url": "https://www.apache.org/licenses/LICENSE-2.0.html",
             },
             openapi_url="/api/v1/openapi.json",
             docs_url="/api/v1/docs",
+            openapi_tags=[
+                {
+                    "name": "Servers",
+                    "description": "Manage Modbus server instances and slave configurations.",
+                },
+                {
+                    "name": "Register Rules",
+                    "description": "Manage per-address simulation rules. Rules take effect within one simulation cycle (~1 s) without a restart.",
+                },
+                {
+                    "name": "Live Data",
+                    "description": "Read the current state of running Modbus servers.",
+                },
+                {
+                    "name": "Import / Export",
+                    "description": "Backup and restore configuration. Selective export lets you choose which sections (servers, slaves, registers) to include.",
+                },
+                {
+                    "name": "System",
+                    "description": "Application-level operations.",
+                },
+            ],
         )
         self.daemon = True
         self.database = database
@@ -259,36 +359,176 @@ class WebServer(threading.Thread):
         self.debug = debug
         self.port = port
 
-        # Setup endpoints
+        # ── Routes ────────────────────────────────────────────────────────────
         self.app.add_api_route(
-            path="/configure-server",
-            endpoint=self.configure_server_handler,
-            methods=["POST"],
-            include_in_schema=True,
-        )
-        self.app.add_api_route(
-            path="/get-server-config",
-            endpoint=self.get_server_config_handler,
+            path="/",
+            endpoint=self.ui_handler,
             methods=["GET"],
-            include_in_schema=True,
+            include_in_schema=False,
+            response_class=FileResponse,
         )
-        self.app.add_api_route(
-            path="/configure-registers",
-            endpoint=self.configure_registers_handler,
-            methods=["POST"],
-            include_in_schema=True,
+        self.app.mount(
+            "/static",
+            StaticFiles(directory=str(_STATIC_DIR)),
+            name="static",
         )
+
+        # ── Live Data ─────────────────────────────────────────────────────────
         self.app.add_api_route(
-            path="/get-registers",
-            endpoint=self.get_registers_handler,
+            path="/status",
+            endpoint=self.status_handler,
             methods=["GET"],
-            include_in_schema=True,
+            tags=["Live Data"],
+            summary="Running-server status",
+            description="Returns the running state and basic info for every Modbus server instance.",
+        )
+        self.app.add_api_route(
+            path="/live-values",
+            endpoint=self.live_values_handler,
+            methods=["GET"],
+            tags=["Live Data"],
+            summary="Live register snapshot",
+            description="Reads the current value of every simulated register from every running slave. Polling this endpoint is the easiest way to observe the simulation in action.",
         )
         self.app.add_api_route(
             path="/get-context",
             endpoint=self.get_context_handler,
             methods=["GET"],
-            include_in_schema=True,
+            tags=["Live Data"],
+            summary="Raw Modbus context for a server",
+            description="Returns the internal Modbus context object for the specified server. Useful for debugging register state.",
+        )
+
+        # ── Servers ───────────────────────────────────────────────────────────
+        self.app.add_api_route(
+            path="/configure-server",
+            endpoint=self.configure_server_handler,
+            methods=["POST"],
+            tags=["Servers"],
+            summary="Bulk configure servers and slaves",
+            description=(
+                "Replaces the entire server/slave configuration in one call. "
+                "Accepts two formats:\n\n"
+                "**Simplified** (`ip`, `port`, `instances`, `slaves`, `identity`, `register_sizes`) — "
+                "all servers share the same identity; all slaves share the same register sizes.\n\n"
+                "**Detailed** (`servers[]`, `slaves[]`) — full per-server and per-slave control. "
+                "Triggers a Modbus server restart."
+            ),
+        )
+        self.app.add_api_route(
+            path="/get-server-config",
+            endpoint=self.get_server_config_handler,
+            methods=["GET"],
+            tags=["Servers"],
+            summary="Get all server and slave configurations",
+            description="Returns the persisted server and slave records from the database.",
+        )
+        self.app.add_api_route(
+            path="/servers/add",
+            endpoint=self.add_server_handler,
+            methods=["POST"],
+            tags=["Servers"],
+            summary="Add or upsert a single server",
+            description="Inserts or replaces a single server record. Does not affect other servers. Triggers a Modbus server restart.",
+        )
+        self.app.add_api_route(
+            path="/servers/{server_id}",
+            endpoint=self.update_server_handler,
+            methods=["PUT"],
+            tags=["Servers"],
+            summary="Update a server",
+            description="Updates the fields of an existing server. The `server_id` in the URL takes precedence over any `server_id` in the body. Triggers a Modbus server restart.",
+        )
+        self.app.add_api_route(
+            path="/servers/{server_id}",
+            endpoint=self.delete_server_handler,
+            methods=["DELETE"],
+            tags=["Servers"],
+            summary="Delete a server",
+            description="Removes a server and all its slave records (cascades). Triggers a Modbus server restart.",
+        )
+
+        # ── Register Rules ────────────────────────────────────────────────────
+        self.app.add_api_route(
+            path="/configure-registers",
+            endpoint=self.configure_registers_handler,
+            methods=["POST"],
+            tags=["Register Rules"],
+            summary="Bulk replace all register rules",
+            description=(
+                "Drops all existing rules and replaces them with the supplied list. "
+                "Use `/rules/add` to append a single rule without disturbing the rest."
+            ),
+        )
+        self.app.add_api_route(
+            path="/get-registers",
+            endpoint=self.get_registers_handler,
+            methods=["GET"],
+            tags=["Register Rules"],
+            summary="Get all register rules",
+            description="Returns every simulation rule stored in the database, including the auto-assigned `id` field used by PUT/DELETE.",
+        )
+        self.app.add_api_route(
+            path="/rules/add",
+            endpoint=self.add_rule_handler,
+            methods=["POST"],
+            tags=["Register Rules"],
+            summary="Add a single register rule",
+            description="Appends one rule without touching existing rules. Returns the new rule's `id`. The rule takes effect within the next simulation cycle (~1 s).",
+        )
+        self.app.add_api_route(
+            path="/rules/{rule_id}",
+            endpoint=self.update_rule_handler,
+            methods=["PUT"],
+            tags=["Register Rules"],
+            summary="Update a register rule",
+            description="Replaces the fields of an existing rule identified by its database `id`.",
+        )
+        self.app.add_api_route(
+            path="/rules/{rule_id}",
+            endpoint=self.delete_rule_handler,
+            methods=["DELETE"],
+            tags=["Register Rules"],
+            summary="Delete a register rule",
+            description="Removes the rule with the given database `id`. Takes effect within the next simulation cycle.",
+        )
+
+        # ── Import / Export ───────────────────────────────────────────────────
+        self.app.add_api_route(
+            path="/export",
+            endpoint=self.export_handler,
+            methods=["GET"],
+            tags=["Import / Export"],
+            summary="Export configuration as JSON",
+            description=(
+                "Downloads a JSON file containing the selected sections. "
+                "Use the `sections` query parameter to choose which sections to include "
+                "(comma-separated: `servers`, `slaves`, `registers`). "
+                "Defaults to all three sections."
+            ),
+        )
+        self.app.add_api_route(
+            path="/import",
+            endpoint=self.import_handler,
+            methods=["POST"],
+            tags=["Import / Export"],
+            summary="Import configuration from JSON",
+            description=(
+                "Selectively replaces configuration sections. Only the sections present in the "
+                "payload are touched — omit `servers`/`slaves` keys to import only register rules, "
+                "or omit `registers` to import only topology. "
+                "Server changes trigger a Modbus server restart."
+            ),
+        )
+
+        # ── System ────────────────────────────────────────────────────────────
+        self.app.add_api_route(
+            path="/restart",
+            endpoint=self.restart_handler,
+            methods=["POST"],
+            tags=["System"],
+            summary="Restart Modbus servers",
+            description="Stops and restarts all Modbus server threads using the current database configuration. The web server and simulation loop remain running.",
         )
 
     def run(self):
@@ -305,13 +545,108 @@ class WebServer(threading.Thread):
         server.run()
 
     def stop(self):
-        """When called, sets the stop event"""
         self._stop_event.set()
         logger.info("Web server stopped")
 
     def stopped(self):
-        """Returns true when stop is called"""
         return self._stop_event.is_set()
+
+    # ── New handlers ──────────────────────────────────────────────────────────
+
+    def ui_handler(self):
+        """Serve the web configuration UI."""
+        return FileResponse(str(_TEMPLATES_DIR / "index.html"))
+
+    def status_handler(self):
+        """Return a summary of running servers and configured objects."""
+        try:
+            servers = self.database.get_servers()
+            slaves = self.database.get_slaves()
+            registers = self.database.get_registers()
+            return {
+                "success": True,
+                "servers_configured": len(servers),
+                "slaves_configured": len(slaves),
+                "registers_configured": len(registers),
+                "servers_running": list(self.modbus_servers.keys()),
+            }
+        except Exception as e:
+            logger.error("Error in status_handler: %s", e)
+            return {"success": False, "message": str(e)}
+
+    def live_values_handler(self, server_id: int = Query(0, description="Server ID")):
+        """
+        Return current Modbus register values for all simulated registers on a server.
+
+        Reads the live Modbus context for each register rule that has an explicit
+        address (skips 'all'-type bulk rules). Range rules (address_end set) return
+        up to 50 values.
+        """
+        modbus_server = self.modbus_servers.get(server_id)
+        if not modbus_server:
+            return {"success": False, "message": f"Server {server_id} is not running"}
+
+        reg_type_codes = {"co": 1, "di": 2, "hr": 3, "ir": 4}
+
+        try:
+            registers = self.database.get_registers()
+            values = []
+
+            for reg in registers:
+                if reg.get("server_id") != server_id:
+                    continue
+                if not reg.get("simulate"):
+                    continue
+
+                slave_id = reg.get("slave_id")
+                reg_type = reg.get("register_type")
+                if reg_type not in reg_type_codes:
+                    continue  # skip "all" bulk rules
+
+                func_code = reg_type_codes[reg_type]
+                addr_start = int(reg.get("address", 0))
+                addr_end = reg.get("address_end")
+
+                try:
+                    if addr_end is not None:
+                        count = min(int(addr_end) - addr_start + 1, 50)
+                        raw = modbus_server.read_registers(slave_id, func_code, addr_start, count)
+                        for i, v in enumerate(raw):
+                            values.append({
+                                "slave_id": slave_id,
+                                "register_type": reg_type,
+                                "address": addr_start + i,
+                                "value": bool(v) if isinstance(v, bool) else int(v),
+                                "simulation_mode": reg.get("simulation_mode"),
+                            })
+                    else:
+                        raw = modbus_server.read_registers(slave_id, func_code, addr_start, 1)
+                        v = raw[0] if raw else None
+                        values.append({
+                            "slave_id": slave_id,
+                            "register_type": reg_type,
+                            "address": addr_start,
+                            "value": (
+                                bool(v) if isinstance(v, bool)
+                                else (int(v) if v is not None else None)
+                            ),
+                            "simulation_mode": reg.get("simulation_mode"),
+                        })
+                except Exception as e:
+                    values.append({
+                        "slave_id": slave_id,
+                        "register_type": reg_type,
+                        "address": addr_start,
+                        "value": f"ERR: {e}",
+                        "simulation_mode": reg.get("simulation_mode"),
+                    })
+
+            return {"success": True, "server_id": server_id, "values": values}
+        except Exception as e:
+            logger.error("Error in live_values_handler: %s", e)
+            return {"success": False, "message": str(e)}
+
+    # ── Existing handlers (unchanged) ─────────────────────────────────────────
 
     def configure_server_handler(self, config: Union[ServerConfig, DetailedServerConfig]):
         """
@@ -332,13 +667,10 @@ class WebServer(threading.Thread):
            - slaves: List of slave configurations with individual register sizes
         """
         try:
-            # Check which format was provided
             if isinstance(config, DetailedServerConfig):
-                # Detailed format: convert Pydantic models to dictionaries
                 servers = [server.model_dump() for server in config.servers]
                 slaves = [slave.model_dump() for slave in config.slaves]
             else:
-                # Simplified format: expand into detailed server and slave configurations
                 servers = []
                 slaves = []
 
@@ -352,7 +684,6 @@ class WebServer(threading.Thread):
                         "version": config.identity.MajorMinorRevision
                     })
 
-                    # Create slaves for this server
                     for slave_id in range(config.slaves):
                         slaves.append({
                             "server_id": server_id,
@@ -363,13 +694,11 @@ class WebServer(threading.Thread):
                             "ir_size": config.register_sizes.ir
                         })
 
-            # Validate and save configuration to database
             result = self.database.save_server_config(servers, slaves)
 
             if not result["success"]:
                 return {"success": False, "message": result["errors"]}
 
-            # Restart Modbus servers with new configuration
             if self.server_manager:
                 self.server_manager.restart_modbus_servers()
                 if isinstance(config, DetailedServerConfig):
@@ -429,7 +758,6 @@ class WebServer(threading.Thread):
         - square: Square wave (for coils/discrete inputs)
         """
         try:
-            # Save registers to the database
             result = self.database.save_registers(config.registers)
 
             if not result["success"]:
@@ -452,7 +780,7 @@ class WebServer(threading.Thread):
             return {"success": False, "message": "No registers found."}
         except Exception as e:
             return {"success": False, "message": str(e)}
-        
+
     def get_context_handler(self, server_id: int = Query(..., description="Server ID to get context for")):
         """Get Modbus server context for a specific server instance."""
         try:
@@ -466,17 +794,170 @@ class WebServer(threading.Thread):
         except Exception as e:
             return {"success": False, "message": str(e)}
 
+    # ── Per-rule register management ──────────────────────────────────────────
+
+    def update_rule_handler(self, rule_id: int, rule: SingleRegisterRule):
+        """Update an existing register rule by id."""
+        try:
+            result = self.database.update_register(rule_id, rule.model_dump())
+            if not result["success"]:
+                return {"success": False, "message": result["errors"]}
+            if not result["updated"]:
+                return {"success": False, "message": f"Rule {rule_id} not found."}
+            return {"success": True, "message": f"Rule {rule_id} updated."}
+        except Exception as e:
+            return {"success": False, "message": str(e)}
+
+    def update_server_handler(self, server_id: int, server: ServerItem):
+        """Update an existing server entry."""
+        try:
+            data = server.model_dump()
+            data["server_id"] = server_id
+            result = self.database.upsert_server(data)
+            if not result["success"]:
+                return {"success": False, "message": result["errors"]}
+            if self.server_manager:
+                self.server_manager.restart_modbus_servers()
+                msg = f"Server {server_id} updated and Modbus servers restarted."
+            else:
+                msg = f"Server {server_id} updated. Restart application to apply."
+            return {"success": True, "message": msg}
+        except Exception as e:
+            return {"success": False, "message": str(e)}
+
+    def add_rule_handler(self, rule: SingleRegisterRule):
+        """Add a single register simulation rule without replacing existing ones."""
+        try:
+            result = self.database.add_register(rule.model_dump())
+            if not result["success"]:
+                return {"success": False, "message": result["errors"]}
+            return {"success": True, "id": result["id"], "message": f"Rule {result['id']} added."}
+        except Exception as e:
+            return {"success": False, "message": str(e)}
+
+    def delete_rule_handler(self, rule_id: int):
+        """Delete a single register rule by its database id."""
+        try:
+            result = self.database.delete_register(rule_id)
+            if not result["success"]:
+                return {"success": False, "message": result["errors"]}
+            if not result["deleted"]:
+                return {"success": False, "message": f"Rule {rule_id} not found."}
+            return {"success": True, "message": f"Rule {rule_id} deleted."}
+        except Exception as e:
+            return {"success": False, "message": str(e)}
+
+    # ── Per-server management ─────────────────────────────────────────────────
+
+    def add_server_handler(self, server: ServerItem):
+        """Add or update a single server entry."""
+        try:
+            result = self.database.upsert_server(server.model_dump())
+            if not result["success"]:
+                return {"success": False, "message": result["errors"]}
+            if self.server_manager:
+                self.server_manager.restart_modbus_servers()
+                msg = f"Server {server.server_id} saved and Modbus servers restarted."
+            else:
+                msg = f"Server {server.server_id} saved. Restart application to apply."
+            return {"success": True, "message": msg}
+        except Exception as e:
+            return {"success": False, "message": str(e)}
+
+    def delete_server_handler(self, server_id: int):
+        """Delete a server and its slave configurations."""
+        try:
+            result = self.database.delete_server(server_id)
+            if not result["success"]:
+                return {"success": False, "message": result["errors"]}
+            if not result["deleted"]:
+                return {"success": False, "message": f"Server {server_id} not found."}
+            if self.server_manager:
+                self.server_manager.restart_modbus_servers()
+                msg = f"Server {server_id} deleted and Modbus servers restarted."
+            else:
+                msg = f"Server {server_id} deleted. Restart application to apply."
+            return {"success": True, "message": msg}
+        except Exception as e:
+            return {"success": False, "message": str(e)}
+
+    # ── Import / Export ───────────────────────────────────────────────────────
+
+    def export_handler(self, sections: str = Query("servers,slaves,registers", description="Comma-separated sections to export")):
+        """Export configuration as JSON. Use ?sections= to limit: servers, slaves, registers."""""
+        try:
+            wanted = {s.strip() for s in sections.split(",")}
+            payload = {}
+            if "servers"   in wanted: payload["servers"]   = self.database.get_servers()
+            if "slaves"    in wanted: payload["slaves"]    = self.database.get_slaves()
+            if "registers" in wanted: payload["registers"] = self.database.get_registers()
+            return JSONResponse(
+                content=payload,
+                headers={"Content-Disposition": 'attachment; filename="modsim-config.json"'},
+            )
+        except Exception as e:
+            return {"success": False, "message": str(e)}
+
+    def restart_handler(self):
+        """Restart all running Modbus servers."""
+        try:
+            if self.server_manager:
+                self.server_manager.restart_modbus_servers()
+                return {"success": True, "message": "Modbus servers restarted."}
+            return {"success": False, "message": "No server manager available — restart the application manually."}
+        except Exception as e:
+            logger.error("Error in restart_handler: %s", e)
+            return {"success": False, "message": str(e)}
+
+    def import_handler(self, payload: ImportPayload):
+        """Import configuration. Only sections present in the payload are replaced.
+        Omit 'servers'/'slaves' keys to import only registers, and vice versa."""
+        try:
+            parts = []
+            restarted = False
+
+            has_servers = payload.servers or payload.slaves
+            if has_servers:
+                servers = list(payload.servers)
+                slaves  = list(payload.slaves)
+                result = self.database.save_server_config(servers, slaves)
+                if not result["success"]:
+                    return {"success": False, "message": result["errors"]}
+                parts.append(f"{len(servers)} server(s), {len(slaves)} slave(s)")
+                if self.server_manager:
+                    self.server_manager.restart_modbus_servers()
+                    restarted = True
+
+            if payload.registers:
+                registers = list(payload.registers)
+                for reg in registers:
+                    if isinstance(reg, dict):
+                        reg.pop("id", None)
+                reg_result = self.database.save_registers(registers)
+                if not reg_result["success"]:
+                    return {"success": False, "message": reg_result["errors"]}
+                parts.append(f"{len(registers)} register rule(s)")
+
+            if not parts:
+                return {"success": False, "message": "Payload contained no recognisable sections."}
+
+            suffix = " Modbus servers restarted." if restarted else ""
+            return {"success": True, "message": "Imported " + ", ".join(parts) + "." + suffix}
+        except Exception as e:
+            logger.error("Error in import_handler: %s", e)
+            return {"success": False, "message": str(e)}
+
+
 if __name__ == "__main__":
     logging.basicConfig(
         level=logging.DEBUG,
         format=("%(asctime)s - %(levelname)-8s - %(name)-20s:%(lineno)5d - %(message)s"),
     )
-    # Parse the arguments for the options
-    parser = argparse.ArgumentParser(description="PLC MQTT Web Interface")
+    parser = argparse.ArgumentParser(description="modSim Web Interface")
     parser.add_argument("--debug", "-d", action="store_true", help="Debugging enable")
-    parser.add_argument("--port", "-p", default=5000, type=int, help="Web server port number")
+    parser.add_argument("--port", "-p", default=8000, type=int, help="Web server port number")
     args = parser.parse_args()
 
-    server = WebServer(args.port, None, num_relays=args.num_relays, debug=args.debug)
+    server = WebServer(args.port, None, {}, debug=args.debug)
     server.start()
     server.join()

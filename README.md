@@ -1,105 +1,96 @@
-# Modbus Simulator
+# modSim — Modbus TCP Simulator
 
-This project provides a Modbus TCP server with configurable registers and simulation capabilities. The server is configurable via a RESTful API and supports dynamic updates, including register simulation.
+A configurable Modbus TCP server with a browser-based UI and REST API. Supports multiple server instances, multiple slaves per server, per-register simulation modes, and persistent SQLite-backed configuration.
 
 ## Features
 
-- Modbus TCP server with configurable IP, port, and identity.
-- REST API for managing server settings and registers.
-- Advanced simulation modes (random, static, equation, sine, ramp, square wave).
-- Persistent storage of register configurations using SQLite.
-- Web server with endpoints for interacting with the Modbus server.
-- Support for register ranges and individual register type sizes.
+- **Modbus TCP** — multiple server instances, each with one or more slaves
+- **Browser UI** — dashboard, live register view, server/rule management, import/export, mobile-friendly
+- **Six simulation modes** — `random`, `static`, `sine`, `ramp`, `square`, `equation`
+- **Per-rule CRUD** — add, edit, and delete individual simulation rules without restart
+- **Import / Export** — backup and restore configuration (servers, slaves, or rules) as JSON; selective section support
+- **Persistent storage** — all runtime configuration stored in SQLite (`settings.db`)
+- **pymodbus 3.13 compatible** — uses `ModbusSimulatorContext` internally; no deprecated APIs
+
+---
 
 ## Prerequisites
 
-- Python 3.11 or higher.
-- `pip` (Python package manager).
-- A Linux, macOS, or Windows environment.
+- Python 3.11 or higher
+- `pip`
+- Linux, macOS, or Windows
 - Git
-- Make (MacOS/Linux Only)
+
+---
 
 ## Installation
 
-### Docker (Recommended)
-The easiest way to run modSim is using Docker:
+### Docker (recommended)
 
-1. Clone the repository
-2. Start the container:
-   ```bash
-   docker-compose up -d
-   ```
-3. The simulator will be available at:
-   - Modbus TCP: `localhost:502`
-   - REST API: `http://localhost:8000/api/v1/docs`
-
-Configuration files (`settings.json`, `settings.db`) will be persisted in the `./data` directory.
-
-To stop the container:
 ```bash
-docker-compose down
+git clone <repo>
+docker-compose up -d
 ```
 
-To view logs:
+- Modbus TCP: `localhost:502`
+- Web UI / API: `http://localhost:8000`
+
+Configuration files (`settings.json`, `settings.db`) are persisted in `./data`.
+
 ```bash
-docker-compose logs -f
+docker-compose down        # stop
+docker-compose logs -f     # stream logs
 ```
 
-### Local Development
+### Local — Windows
 
-1. Clone the repository
-2. Depending on the OS you are using, run the following commands:
-    - **MacOS/Linux**: `make local`
-    - **Windows**:
-      - Create the virtual environment: `python -m venv env`
-      - Activate the virtual environment: `env\Scripts\activate`
-      - Install the required packages: `pip install -r requirements.txt`
+```powershell
+python -m venv env
+env\Scripts\activate
+pip install -r requirements.txt
+```
 
-### Production (Systemd Service)
+### Local — macOS / Linux
 
-For a production environment on Linux with systemd:
-- **MacOS/Linux:** `sudo make install` (This will create a virtual environment, install the required packages, and install the service.)
+```bash
+make local
+```
+
+### Production (systemd)
+
+```bash
+sudo make install
+```
+
+---
 
 ## Configuration
 
-### Configuration Architecture
-
 modSim uses a two-layer configuration system:
 
-1. **settings.json** - Application-level settings and initial defaults
-   - Web server port
-   - Default Modbus server settings (used only when database is empty)
-   - Only loaded at startup to initialize database if empty
+| Layer | File | Purpose |
+|-------|------|---------|
+| Startup defaults | `settings.json` | Seeds the database on first run only |
+| Runtime config | `settings.db` | All live configuration; survives restarts |
 
-2. **settings.db** - Runtime configuration database
-   - Server instances and their properties (IP, port, identity)
-   - Slave configurations and register sizes
-   - Register simulation settings
-   - All runtime configuration is stored here and persists across restarts
+After the first run, use the web UI or API to change configuration — edits to `settings.json` are ignored unless `settings.db` is deleted.
 
-### Default Settings
-If the `settings.json` file does not exist, it will be created with the following default values:
+### Default `settings.json`
+
 ```json
 {
-  "web": {
-    "port": 8000
-  },
+  "web": { "port": 8000 },
   "modbus": {
     "ip": "0.0.0.0",
     "port": 502,
-    "slaves": 1,
     "instances": 1,
+    "slaves": 1,
     "identity": {
       "VendorName": "ModbusSimulator",
       "ProductCode": "MSIM",
       "MajorMinorRevision": "1.0"
     },
-    "register_sizes": {
-      "co": 100,
-      "di": 100,
-      "hr": 100,
-      "ir": 100
-    },
+    "register_sizes": { "co": 100, "di": 100, "hr": 100, "ir": 100 },
     "config": {
       "registers": [{ "slave_id": 0, "register_type": "all", "simulate": true }]
     }
@@ -107,614 +98,476 @@ If the `settings.json` file does not exist, it will be created with the followin
 }
 ```
 
-> **NOTE:** The `settings.json` file is used **only for initial database population**. After the first run, all configuration is managed via the database and API. To reset configuration, delete `settings.db` and restart the application.
+> To reset all configuration, delete `settings.db` and restart.
 
-#### Register Sizes
-The `register_sizes` field allows you to configure individual sizes for each register type:
-- `co` - Coils (discrete outputs)
-- `di` - Discrete Inputs
-- `hr` - Holding Registers
-- `ir` - Input Registers
+### Register types
 
-Each type can have a different size, allowing for flexible memory allocation based on your simulation needs.
+| Key | Description |
+|-----|-------------|
+| `co` | Coils (FC 1/5/15) |
+| `di` | Discrete Inputs (FC 2) |
+| `hr` | Holding Registers (FC 3/6/16) |
+| `ir` | Input Registers (FC 4) |
 
-With the default config, the server will be configured automatically to simulate all registers with:
-```json
-"config": {
-  "registers": [{ "slave_id": 0, "register_type": "all", "simulate": true }]
-}
+---
+
+## Running
+
+```bash
+python -m modSim           # normal
+python -m modSim --debug   # verbose logging
 ```
-This can be updated after the program is running using the endpoints described below.
 
-### Database
-The program uses an SQLite database (`settings.db`) to store register configurations. The database is initialized automatically if it does not exist.
+- Web UI: `http://localhost:8000`
+- API docs (Swagger): `http://localhost:8000/api/v1/docs`
 
-## Running the Server
+---
 
-1. Start the simulator:
-   ```bash
-   python -m modSim
-   ```
+## Web UI
 
-2. Optional: Enable debug mode for detailed logging:
-   ```bash
-   python -m modSim --debug
-   ```
+The browser interface is served at `/`. It provides:
 
-3. The REST API documentation will be available at:
-   ```
-   http://localhost:8000/api/v1/docs
-   ```
+| Page | Description |
+|------|-------------|
+| Dashboard | Live status of every Modbus server and key counters |
+| Servers | Add, edit, delete server instances and their slaves |
+| Register Rules | Add, edit, delete simulation rules; inline mode-config editor |
+| Live Values | Real-time register snapshot, auto-refreshes every second |
+| Import / Export | Download the full config as JSON; upload to restore; selective section export |
+| Reference | Simulation mode quick-reference |
+
+The UI is responsive and works on mobile (hamburger sidebar navigation).
+
+---
 
 ## API Endpoints
 
-The server can be configured over a REST API located at **http://server_address:web_port/api/v1/docs**.
+Interactive docs: `http://localhost:8000/api/v1/docs`
 
-### Server Configuration
-- **POST /configure-server**
-  Configure Modbus server instances and slaves. This dynamically updates the running configuration and restarts all Modbus servers.
+Endpoints are grouped into five categories.
 
-  **This endpoint supports two configuration formats:**
+---
 
-  #### Format 1: Simplified Configuration (settings.json style)
-  This simplified format is ideal for quick setup when all servers have the same identity and all slaves have the same register sizes.
+### Servers
 
-  **Parameters:**
-  - `ip`: IP address to bind to (default: "0.0.0.0")
-  - `port`: Base port number (each instance gets port + instance_id)
-  - `instances`: Number of Modbus server instances to create
-  - `slaves`: Number of slaves per server instance
-  - `identity`: Modbus identity information (VendorName, ProductCode, MajorMinorRevision)
-  - `register_sizes`: Default register sizes for each type (co, di, hr, ir)
+#### `POST /configure-server` — bulk configure servers & slaves
 
-  Example - Create 2 servers with 3 slaves each:
-  ```json
-  {
-    "ip": "0.0.0.0",
-    "port": 502,
-    "instances": 2,
-    "slaves": 3,
-    "identity": {
-      "VendorName": "MySimulator",
-      "ProductCode": "SIM1",
-      "MajorMinorRevision": "2.0"
+Replaces the **entire** server/slave topology. Accepts two formats.
+
+**Simplified** — all servers share the same identity; all slaves share the same register sizes:
+
+```json
+{
+  "ip": "0.0.0.0",
+  "port": 502,
+  "instances": 2,
+  "slaves": 3,
+  "identity": {
+    "VendorName": "MySimulator",
+    "ProductCode": "SIM1",
+    "MajorMinorRevision": "2.0"
+  },
+  "register_sizes": { "co": 200, "di": 200, "hr": 500, "ir": 500 }
+}
+```
+
+Creates server 0 on port 502 and server 1 on port 503, each with slaves 0–2.
+
+**Detailed** — full per-server and per-slave control:
+
+```json
+{
+  "servers": [
+    { "server_id": 0, "ip": "0.0.0.0", "port": 502,
+      "vendor_name": "Acme", "product_code": "SIM1", "version": "1.0" }
+  ],
+  "slaves": [
+    { "server_id": 0, "slave_id": 0, "co_size": 100, "di_size": 100, "hr_size": 100, "ir_size": 1200 },
+    { "server_id": 0, "slave_id": 1, "co_size": 100, "di_size": 100, "hr_size": 100, "ir_size": 1200 }
+  ]
+}
+```
+
+Triggers a Modbus server restart.
+
+---
+
+#### `GET /get-server-config` — get all servers and slaves
+
+Returns the current database records.
+
+---
+
+#### `POST /servers/add` — add or upsert a single server
+
+Inserts or replaces one server without touching others. Triggers restart.
+
+```json
+{
+  "server_id": 1,
+  "ip": "0.0.0.0",
+  "port": 503,
+  "vendor_name": "Acme",
+  "product_code": "SIM2",
+  "version": "2.0"
+}
+```
+
+---
+
+#### `PUT /servers/{server_id}` — update a server
+
+Updates one server's fields. `server_id` in the URL takes precedence. Triggers restart.
+
+---
+
+#### `DELETE /servers/{server_id}` — delete a server
+
+Removes the server and all its slave records (cascade). Triggers restart.
+
+---
+
+### Register Rules
+
+Simulation rules are evaluated every second. Add or delete rules; they take effect within one cycle — no restart needed.
+
+#### `POST /configure-registers` — bulk replace all rules
+
+Drops every existing rule and replaces with the supplied list. To append without replacing, use `/rules/add`.
+
+```json
+{
+  "registers": [
+    {
+      "server_id": 0,
+      "slave_id": 1,
+      "register_type": "ir",
+      "address": 76,
+      "address_end": 87,
+      "simulate": true,
+      "simulation_mode": "static",
+      "simulation_config": { "value": 0 }
     },
-    "register_sizes": {
-      "co": 200,
-      "di": 200,
-      "hr": 500,
-      "ir": 500
+    {
+      "slave_id": 0,
+      "register_type": "hr",
+      "address": 0,
+      "address_end": 99,
+      "simulate": true,
+      "simulation_mode": "sine",
+      "simulation_config": { "amplitude": 100, "offset": 200, "period": 60 }
     }
-  }
-  ```
+  ]
+}
+```
 
-  This will create:
-  - Server 0 on port 502 with slaves 0, 1, 2
-  - Server 1 on port 503 with slaves 0, 1, 2
-  - All slaves have register sizes: co=200, di=200, hr=500, ir=500
+If `server_id` is omitted from a rule, it applies to all server instances that don't have an explicit rule.
 
-  #### Format 2: Detailed Configuration
-  This format provides full control over individual server and slave configurations, allowing different settings for each.
+---
 
-  Example - Single server with one slave:
-  ```json
-  {
-    "servers": [
-      {
-        "server_id": 0,
-        "ip": "0.0.0.0",
-        "port": 502,
-        "vendor_name": "ModbusSimulator",
-        "product_code": "MSIM",
-        "version": "1.0"
-      }
-    ],
-    "slaves": [
-      {
-        "server_id": 0,
-        "slave_id": 0,
-        "co_size": 100,
-        "di_size": 100,
-        "hr_size": 100,
-        "ir_size": 100
-      }
-    ]
-  }
-  ```
+#### `GET /get-registers` — get all rules
 
-  Example - Multiple servers with different configurations:
-  ```json
-  {
-    "servers": [
-      {
-        "server_id": 0,
-        "ip": "0.0.0.0",
-        "port": 502,
-        "vendor_name": "ModbusSimulator",
-        "product_code": "MSIM",
-        "version": "1.0"
-      },
-      {
-        "server_id": 1,
-        "ip": "0.0.0.0",
-        "port": 503,
-        "vendor_name": "ModbusSimulator2",
-        "product_code": "MSIM2",
-        "version": "2.0"
-      }
-    ],
-    "slaves": [
-      {
-        "server_id": 0,
-        "slave_id": 0,
-        "co_size": 100,
-        "di_size": 100,
-        "hr_size": 100,
-        "ir_size": 100
-      },
-      {
-        "server_id": 0,
-        "slave_id": 1,
-        "co_size": 200,
-        "di_size": 200,
-        "hr_size": 200,
-        "ir_size": 200
-      },
-      {
-        "server_id": 1,
-        "slave_id": 0,
-        "co_size": 150,
-        "di_size": 150,
-        "hr_size": 150,
-        "ir_size": 150
-      }
-    ]
-  }
-  ```
+Returns all rules including their database `id` (needed for PUT/DELETE).
 
-- **GET /get-server-config**
-  Retrieve the current server and slave configuration from the database.
+---
 
-### Register Management
-- **POST /configure-registers**
-  Configure Modbus registers (addresses, values, simulation settings).
+#### `POST /rules/add` — add a single rule
 
-  **Basic Examples:**
-  ```json
-  {
-    "registers": [
-      {"server_id": 1, "slave_id": 1, "register_type": "hr", "address": 0, "simulate": true},
-      {"server_id": 1, "slave_id": 2, "register_type": "co", "address": 1, "simulate": false}
-    ]
-  }
-  ```
+Appends one rule without touching others. Returns the new `id`.
 
-  **Simulate all registers:**
-  ```json
-  {
-    "registers": [
-      {"slave_id": 1, "register_type": "all", "simulate": true}
-    ]
-  }
-  ```
+```json
+{
+  "slave_id": 1,
+  "register_type": "ir",
+  "address": 1141,
+  "simulate": true,
+  "simulation_mode": "sine",
+  "simulation_config": { "amplitude": 2, "offset": 6, "period": 7200 }
+}
+```
 
-  **New Features:**
+Response:
+```json
+{ "success": true, "id": 7, "message": "Rule 7 added." }
+```
 
-  1. **Register Range Simulation** - Simulate a range of consecutive addresses:
-  ```json
-  {
-    "registers": [
-      {
-        "server_id": 0,
-        "slave_id": 0,
-        "register_type": "hr",
-        "address": 0,
-        "address_end": 50,
-        "simulate": true
-      }
-    ]
-  }
-  ```
-  This simulates holding registers from address 0 to 50 (inclusive).
+---
 
-  2. **Individual Register Type Sizes** - Override the default size for a specific register type:
-  ```json
-  {
-    "registers": [
-      {
-        "server_id": 0,
-        "slave_id": 0,
-        "register_type": "co",
-        "register_size": 200,
-        "simulate": true
-      }
-    ]
-  }
-  ```
-  This creates a coil register space of 200 addresses instead of the default 100.
+#### `PUT /rules/{rule_id}` — update a rule
 
-  3. **Combined Configuration** - Use ranges and custom sizes together:
-  ```json
-  {
-    "registers": [
-      {
-        "slave_id": 0,
-        "register_type": "hr",
-        "address": 0,
-        "address_end": 99,
-        "simulate": true
-      },
-      {
-        "slave_id": 0,
-        "register_type": "ir",
-        "address": 100,
-        "address_end": 199,
-        "register_size": 300,
-        "simulate": true
-      }
-    ]
-  }
-  ```
+Replaces all fields of the rule with the given database `id`.
 
-  **Default Configuration (applies to all servers):**
-  If `server_id` is omitted from a register configuration, it will apply to all server instances that don't have explicit configurations:
-  ```json
-  {
-    "registers": [
-      {"slave_id": 0, "register_type": "all", "simulate": true}
-    ]
-  }
-  ```
-  This applies the configuration to all server instances.
+---
 
-  You can combine default and specific configurations:
-  ```json
-  {
-    "registers": [
-      {"slave_id": 0, "register_type": "all", "simulate": true},
-      {"server_id": 1, "slave_id": 0, "register_type": "hr", "simulate": false}
-    ]
-  }
-  ```
-  This applies the default config to all servers except server 1, which gets its own specific configuration.
+#### `DELETE /rules/{rule_id}` — delete a rule
 
-  **Available Register Types:**
-  - `all` - All register types
-  - `co` - Coils (discrete outputs)
-  - `di` - Discrete Inputs
-  - `hr` - Holding Registers
-  - `ir` - Input Registers
+Removes the rule. Takes effect within the next simulation cycle.
 
-- **GET /get-registers**
-  Retrieve the current register configuration.
+---
 
-- **GET /get-context**
-  Retrieve the Modbus context.
+### Live Data
+
+#### `GET /status` — server status
+
+Returns the running state and port of every Modbus server instance.
+
+#### `GET /live-values` — live register snapshot
+
+Reads every simulated register from every running slave. Useful for verifying simulation output.
+
+#### `GET /get-context?server_id={id}` — raw Modbus context
+
+Returns the raw pymodbus context object for debugging.
+
+---
+
+### Import / Export
+
+#### `GET /export?sections=servers,slaves,registers` — export config
+
+Downloads a JSON file. Use the `sections` query parameter to export only specific parts:
+
+| `sections` value | What is exported |
+|------------------|-----------------|
+| `servers,slaves,registers` (default) | Full configuration |
+| `registers` | Only simulation rules |
+| `servers,slaves` | Only topology |
+
+The response includes `Content-Disposition: attachment` so browsers prompt to save the file.
+
+---
+
+#### `POST /import` — import config
+
+Selective import — only sections present in the payload are replaced:
+
+```json
+{
+  "registers": [
+    { "slave_id": 1, "register_type": "ir", "address": 1121,
+      "simulate": true, "simulation_mode": "static",
+      "simulation_config": { "value": 3 } }
+  ]
+}
+```
+
+Omit `servers`/`slaves` to replace only rules. Omit `registers` to replace only topology. Server changes trigger a restart.
+
+---
+
+### System
+
+#### `POST /restart` — restart Modbus servers
+
+Stops and restarts all Modbus server threads using the current database configuration. The web server, simulation loop, and API remain available during the restart.
+
+---
 
 ## Simulation Modes
 
-modSim supports multiple simulation modes for registers, similar to Ignition's device simulator. Each register can be configured with a specific simulation mode and associated configuration parameters.
+Every register rule specifies a `simulation_mode` and a `simulation_config` dict.
 
-### Available Simulation Modes
+### `random`
 
-#### 1. Random (Default)
-Generates random values within a specified range.
+Generates a random integer each cycle.
 
-**Parameters:**
-- `min` (optional): Minimum value (default: 0)
-- `max` (optional): Maximum value (default: 500)
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `min` | `0` | Minimum value |
+| `max` | `500` | Maximum value |
 
-**Example:**
 ```json
-{
-  "slave_id": 0,
-  "register_type": "hr",
-  "address": 0,
-  "simulate": true,
-  "simulation_mode": "random",
-  "simulation_config": {
-    "min": 0,
-    "max": 1000
-  }
-}
+{ "simulation_mode": "random", "simulation_config": { "min": 0, "max": 1000 } }
 ```
 
-#### 2. Static
-Returns a fixed value.
+---
 
-**Parameters:**
-- `value`: The static value to return
+### `static`
 
-**Example:**
+Returns a fixed value every cycle.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `value` | `0` | Value to hold |
+
 ```json
-{
-  "slave_id": 0,
-  "register_type": "hr",
-  "address": 10,
-  "simulate": true,
-  "simulation_mode": "static",
-  "simulation_config": {
-    "value": 42
-  }
-}
+{ "simulation_mode": "static", "simulation_config": { "value": 3 } }
 ```
 
-#### 3. Equation
-Evaluates a mathematical expression to generate values. Similar to Ignition's expression-based simulation.
+---
 
-**Available Variables:**
-- `x`: Counter that increments with each simulation cycle (per register)
-- `address`: The register address
-- `slave_id`: The slave ID
-- `server_id`: The server ID
+### `sine`
 
-**Available Functions:**
-- Trigonometric: `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`
-- Hyperbolic: `sinh`, `cosh`, `tanh`
-- Math: `sqrt`, `abs`, `pow`, `exp`, `log`, `log10`
-- Rounding: `floor`, `ceil`, `round`
-- Other: `min`, `max`
-- Constants: `pi`, `e`
+Generates a sine wave: `value = amplitude × sin(2π × counter / period) + offset`
 
-**Parameters:**
-- `equation`: The mathematical expression to evaluate
-
-**Examples:**
-```json
-{
-  "slave_id": 0,
-  "register_type": "hr",
-  "address": 20,
-  "simulate": true,
-  "simulation_mode": "equation",
-  "simulation_config": {
-    "equation": "sin(x / 10) * 100 + 200"
-  }
-}
-```
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `amplitude` | `100` | Peak deviation from offset |
+| `offset` | `0` | Vertical centre |
+| `period` | `60` | Cycle length in simulation ticks (1 tick ≈ 1 s) |
 
 ```json
 {
-  "slave_id": 0,
-  "register_type": "hr",
-  "address": 30,
-  "simulate": true,
-  "simulation_mode": "equation",
-  "simulation_config": {
-    "equation": "x * 2 + address"
-  }
-}
-```
-
-#### 4. Ramp
-Generates a linear ramp that increases by a step value and wraps around.
-
-**Parameters:**
-- `min`: Minimum value (default: 0)
-- `max`: Maximum value (default: 100)
-- `step`: Increment per cycle (default: 1)
-
-**Example:**
-```json
-{
-  "slave_id": 0,
-  "register_type": "hr",
-  "address": 50,
-  "simulate": true,
-  "simulation_mode": "ramp",
-  "simulation_config": {
-    "min": 0,
-    "max": 100,
-    "step": 5
-  }
-}
-```
-
-#### 5. Sine Wave
-Generates a sine wave pattern.
-
-**Parameters:**
-- `amplitude`: Wave amplitude (default: 100)
-- `offset`: Vertical offset (default: 0)
-- `period`: Period in simulation cycles (default: 60)
-
-**Example:**
-```json
-{
-  "slave_id": 0,
-  "register_type": "hr",
-  "address": 60,
-  "simulate": true,
   "simulation_mode": "sine",
-  "simulation_config": {
-    "amplitude": 150,
-    "offset": 200,
-    "period": 60
-  }
+  "simulation_config": { "amplitude": 500, "offset": 3000, "period": 7200 }
 }
 ```
 
-#### 6. Square Wave
-Generates a square wave pattern.
+---
 
-**Parameters:**
-- `high`: High value (default: 100)
-- `low`: Low value (default: 0)
-- `period`: Period in simulation cycles (default: 10)
-- `duty_cycle`: Duty cycle from 0.0 to 1.0 (default: 0.5)
+### `ramp`
 
-**Example:**
+Increases by `step` each cycle, wrapping back to `min` after `max`.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `min` | `0` | Start value (also reset value) |
+| `max` | `100` | Value that triggers wrap |
+| `step` | `1` | Increment per cycle |
+
+```json
+{ "simulation_mode": "ramp", "simulation_config": { "min": 0, "max": 100, "step": 5 } }
+```
+
+---
+
+### `square`
+
+Alternates between two values based on a duty cycle.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `high` | `100` | Value during the ON phase |
+| `low` | `0` | Value during the OFF phase |
+| `period` | `10` | Full cycle length in ticks |
+| `duty_cycle` | `0.5` | Fraction of period spent at `high` (0.0–1.0) |
+
 ```json
 {
-  "slave_id": 0,
-  "register_type": "co",
-  "address": 70,
-  "simulate": true,
   "simulation_mode": "square",
-  "simulation_config": {
-    "high": 1,
-    "low": 0,
-    "period": 20,
-    "duty_cycle": 0.3
-  }
+  "simulation_config": { "high": 1, "low": 0, "period": 20, "duty_cycle": 0.3 }
 }
 ```
 
-### Boolean Registers
+---
 
-For boolean register types (`co` and `di`):
-- **random**: Returns random True/False
-- **static**: Converts value to boolean (0 = False, non-zero = True)
-- **equation**: Converts result to boolean
-- **ramp**: Returns True/False based on odd/even value
-- **sine**: Returns True when value > offset
-- **square**: Returns boolean based on high/low values
+### `equation`
 
-### Simulation Configuration Examples
+Evaluates a Python expression each cycle. Counter variable `x` increments per tick per register.
 
-**Configure via API:**
-```bash
-curl -X POST http://localhost:8000/configure-registers \
-  -H "Content-Type: application/json" \
-  -d '{
-    "registers": [
-      {
-        "slave_id": 0,
-        "register_type": "hr",
-        "address": 200,
-        "simulate": true,
-        "simulation_mode": "sine",
-        "simulation_config": {
-          "amplitude": 100,
-          "offset": 200,
-          "period": 20
-        }
-      },
-      {
-        "slave_id": 0,
-        "register_type": "hr",
-        "address": 300,
-        "simulate": true,
-        "simulation_mode": "ramp",
-        "simulation_config": {
-          "min": 0,
-          "max": 50,
-          "step": 5
-        }
-      },
-      {
-        "slave_id": 0,
-        "register_type": "hr",
-        "address": 400,
-        "simulate": true,
-        "simulation_mode": "static",
-        "simulation_config": {
-          "value": 42
-        }
-      }
-    ]
-  }'
-```
+**Available variables:** `x`, `address`, `slave_id`, `server_id`
 
-**Configure via settings.json:**
+**Available functions:** `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `sqrt`, `abs`, `pow`, `exp`, `log`, `log10`, `floor`, `ceil`, `round`, `min`, `max`, `pi`, `e`
+
 ```json
 {
-  "modbus": {
-    "config": {
-      "registers": [
-        {
-          "slave_id": 0,
-          "register_type": "hr",
-          "address": 0,
-          "address_end": 10,
-          "simulate": true,
-          "simulation_mode": "equation",
-          "simulation_config": {
-            "equation": "sin(x) * 100 + address * 10"
-          }
-        },
-        {
-          "slave_id": 0,
-          "register_type": "hr",
-          "address": 20,
-          "simulate": true,
-          "simulation_mode": "ramp",
-          "simulation_config": {
-            "min": 0,
-            "max": 100,
-            "step": 1
-          }
-        }
-      ]
-    }
-  }
+  "simulation_mode": "equation",
+  "simulation_config": { "equation": "sin(x / 10) * 100 + address" }
 }
 ```
 
-### Simulation Notes
+> Built-in Python functions and imports are disabled for security.
 
-- Each register maintains its own counter (`x`) for equation and pattern-based simulations
-- Counters increment with each simulation cycle (default: 1 second)
-- The equation mode uses a restricted namespace for security (no file I/O, imports, etc.)
-- For range simulations (using `address_end`), each address in the range gets its own counter
-- All simulation modes work with register range simulation
+---
+
+### Boolean registers (`co`, `di`)
+
+All modes work with coil/discrete-input registers:
+
+| Mode | Boolean result |
+|------|---------------|
+| `random` | Random `True`/`False` |
+| `static` | `bool(value)` |
+| `ramp` | `True` when value is odd |
+| `sine` | `True` when value > offset |
+| `square` | `bool(high)` during ON phase |
+| `equation` | `bool(result)` |
+
+---
+
+### Simulation notes
+
+- Each register in a range rule gets its own independent counter
+- Counters increment once per simulation cycle (default ≈ 1 second)
+- `period` for `sine`/`square`/`ramp` is in simulation ticks, not seconds (though with a 1 s cycle they are equivalent)
+- `register_size` in a rule overrides the slave's configured size for address-range validation only
+
+---
+
+## Import/Export format
+
+The JSON format used by `/export` and `/import`:
+
+```json
+{
+  "servers": [
+    {
+      "server_id": 0,
+      "ip": "0.0.0.0",
+      "port": 502,
+      "vendor_name": "Acme",
+      "product_code": "SIM1",
+      "version": "1.0"
+    }
+  ],
+  "slaves": [
+    { "server_id": 0, "slave_id": 0, "co_size": 100, "di_size": 100, "hr_size": 100, "ir_size": 200 },
+    { "server_id": 0, "slave_id": 1, "co_size": 100, "di_size": 100, "hr_size": 100, "ir_size": 200 }
+  ],
+  "registers": [
+    {
+      "slave_id": 1, "register_type": "ir",
+      "address": 0, "address_end": 9,
+      "simulate": true, "simulation_mode": "static",
+      "simulation_config": { "value": 0 }
+    },
+    {
+      "slave_id": 1, "register_type": "hr", "address": 100,
+      "simulate": true, "simulation_mode": "sine",
+      "simulation_config": { "amplitude": 100, "offset": 500, "period": 3600 }
+    }
+  ]
+}
+```
+
+Any `id` fields in `registers` are stripped during import — IDs are always assigned by the database.
+
+---
 
 ## Testing
 
-### Running Unit Tests
-
-The project includes a comprehensive test suite using pytest. Tests cover the simulation engine, database operations, and API endpoints.
-
-**Install test dependencies:**
 ```bash
-pip install -r requirements.txt
+pytest                          # all tests
+pytest --cov=modSim --cov-report=html   # with coverage
+pytest tests/test_simulator.py  # simulation engine only
+pytest tests/test_database.py   # database only
+pytest tests/test_web.py        # API endpoints only
+pytest -v                       # verbose
 ```
 
-**Run all tests:**
-```bash
-pytest
-```
+Test coverage includes simulation engine, database CRUD, and all API endpoints (100 tests).
 
-**Run tests with coverage report:**
-```bash
-pytest --cov=modSim --cov-report=html
-```
+### Testing with a Modbus client
 
-**Run specific test files:**
-```bash
-pytest tests/test_simulator.py      # Test simulation engine
-pytest tests/test_database.py       # Test database operations
-pytest tests/test_web.py           # Test API endpoints
-```
-
-**Run tests with verbose output:**
-```bash
-pytest -v
-```
-
-The test suite includes:
-- **test_simulator.py**: Tests for all simulation modes (random, static, equation, ramp, sine, square)
-- **test_database.py**: Tests for register storage, retrieval, and validation
-- **test_web.py**: Tests for all API endpoints and configurations
-
-Coverage reports are generated in the `htmlcov/` directory after running tests with `--cov-report=html`.
-
-### Testing the Modbus Server
-
-You can test the Modbus server using tools like `modpoll` or any Modbus client software:
 ```bash
 modpoll -m tcp -r 0 -c 10 -t 3:int -a 1 127.0.0.1
 ```
 
+---
+
 ## Logs
 
-Logs are managed using Python’s `logging` module. By default:
-- Info logs are output to the console.
-- Debug logs are enabled when using the `--debug` flag.
-
-## Stopping the Simulator
-
-The simulator gracefully shuts down when receiving a `SIGINT` or `SIGTERM` signal:
 ```bash
-Ctrl+C  # To stop the server
+python -m modSim           # INFO to stdout
+python -m modSim --debug   # DEBUG to stdout
 ```
+
+---
+
+## Stopping
+
+```
+Ctrl+C
+```
+
+The simulator handles `SIGINT` and `SIGTERM` gracefully.

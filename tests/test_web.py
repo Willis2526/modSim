@@ -915,3 +915,214 @@ class TestWebServerEndpoints:
         assert len(data["slaves"]) == 2
         assert data["slaves"][0]["co_size"] == 2000
         assert data["slaves"][1]["co_size"] == 3000
+
+
+class TestRuleCRUD:
+    """Tests for per-rule add / update / delete endpoints."""
+
+    def test_add_rule_success(self, client):
+        response = client.post("/rules/add", json={
+            "slave_id": 0, "register_type": "hr", "address": 10, "simulate": True,
+            "simulation_mode": "random", "simulation_config": {"min": 0, "max": 100}
+        })
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert "id" in data
+
+    def test_add_rule_increments_id(self, client):
+        r1 = client.post("/rules/add", json={"slave_id": 0, "register_type": "hr", "address": 1})
+        r2 = client.post("/rules/add", json={"slave_id": 0, "register_type": "hr", "address": 2})
+        id1 = r1.json()["id"]
+        id2 = r2.json()["id"]
+        assert id2 > id1
+
+    def test_add_rule_appears_in_get_registers(self, client):
+        client.post("/rules/add", json={"slave_id": 0, "register_type": "co", "address": 5, "simulate": True})
+        response = client.get("/get-registers")
+        assert response.status_code == 200
+        regs = response.json()["registers"]
+        assert any(r["address"] == 5 and r["register_type"] == "co" for r in regs)
+
+    def test_update_rule_success(self, client):
+        add_resp = client.post("/rules/add", json={"slave_id": 0, "register_type": "hr", "address": 20, "simulate": False})
+        rule_id = add_resp.json()["id"]
+
+        upd = client.put(f"/rules/{rule_id}", json={"slave_id": 0, "register_type": "ir", "address": 20, "simulate": True})
+        assert upd.status_code == 200
+        assert upd.json()["success"] is True
+
+        regs = client.get("/get-registers").json()["registers"]
+        updated = next(r for r in regs if r["id"] == rule_id)
+        assert updated["register_type"] == "ir"
+        assert updated["simulate"] is True
+
+    def test_update_rule_not_found(self, client):
+        response = client.put("/rules/99999", json={"slave_id": 0, "register_type": "hr", "address": 0})
+        assert response.status_code == 200
+        assert response.json()["success"] is False
+
+    def test_delete_rule_success(self, client):
+        add_resp = client.post("/rules/add", json={"slave_id": 0, "register_type": "hr", "address": 30})
+        rule_id = add_resp.json()["id"]
+
+        del_resp = client.delete(f"/rules/{rule_id}")
+        assert del_resp.status_code == 200
+        assert del_resp.json()["success"] is True
+
+        regs = client.get("/get-registers").json()
+        ids = [r["id"] for r in regs.get("registers", [])]
+        assert rule_id not in ids
+
+    def test_delete_rule_not_found(self, client):
+        response = client.delete("/rules/99999")
+        assert response.status_code == 200
+        assert response.json()["success"] is False
+
+    def test_multiple_rules_coexist(self, client):
+        ids = []
+        for addr in (10, 20, 30):
+            r = client.post("/rules/add", json={"slave_id": 0, "register_type": "hr", "address": addr})
+            ids.append(r.json()["id"])
+
+        regs = client.get("/get-registers").json()["registers"]
+        existing_ids = {r["id"] for r in regs}
+        for rule_id in ids:
+            assert rule_id in existing_ids
+
+
+class TestServerCRUD:
+    """Tests for per-server add / update / delete endpoints."""
+
+    def test_add_server_success(self, client):
+        response = client.post("/servers/add", json={
+            "server_id": 10, "ip": "0.0.0.0", "port": 5020,
+            "vendor_name": "TestVendor", "product_code": "TV", "version": "1.0"
+        })
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+
+    def test_add_server_appears_in_config(self, client):
+        client.post("/servers/add", json={
+            "server_id": 11, "ip": "127.0.0.1", "port": 5021,
+            "vendor_name": "V", "product_code": "V", "version": "1.0"
+        })
+        cfg = client.get("/get-server-config").json()
+        assert any(s["server_id"] == 11 for s in cfg["servers"])
+
+    def test_update_server_success(self, client):
+        client.post("/servers/add", json={
+            "server_id": 20, "ip": "0.0.0.0", "port": 5030,
+            "vendor_name": "Before", "product_code": "B", "version": "1.0"
+        })
+        upd = client.put("/servers/20", json={
+            "server_id": 20, "ip": "0.0.0.0", "port": 5031,
+            "vendor_name": "After", "product_code": "A", "version": "2.0"
+        })
+        assert upd.status_code == 200
+        assert upd.json()["success"] is True
+
+        cfg = client.get("/get-server-config").json()
+        srv = next(s for s in cfg["servers"] if s["server_id"] == 20)
+        assert srv["port"] == 5031
+        assert srv["vendor_name"] == "After"
+
+    def test_delete_server_success(self, client):
+        client.post("/servers/add", json={
+            "server_id": 30, "ip": "0.0.0.0", "port": 5040,
+            "vendor_name": "Del", "product_code": "D", "version": "1.0"
+        })
+        del_resp = client.delete("/servers/30")
+        assert del_resp.status_code == 200
+        assert del_resp.json()["success"] is True
+
+        cfg = client.get("/get-server-config").json()
+        assert not any(s["server_id"] == 30 for s in cfg["servers"])
+
+    def test_delete_server_not_found(self, client):
+        response = client.delete("/servers/99999")
+        assert response.status_code == 200
+        assert response.json()["success"] is False
+
+
+class TestExportImport:
+    """Tests for export / import endpoints."""
+
+    def _seed(self, client):
+        client.post("/configure-server", json={
+            "ip": "0.0.0.0", "port": 502, "instances": 1, "slaves": 1,
+            "identity": {"VendorName": "X", "ProductCode": "X", "MajorMinorRevision": "1.0"},
+            "register_sizes": {"co": 100, "di": 100, "hr": 100, "ir": 100}
+        })
+        client.post("/rules/add", json={"slave_id": 0, "register_type": "hr", "address": 5, "simulate": True})
+
+    def test_export_all_sections(self, client):
+        self._seed(client)
+        response = client.get("/export?sections=servers,slaves,registers")
+        assert response.status_code == 200
+        data = response.json()
+        assert "servers" in data
+        assert "slaves" in data
+        assert "registers" in data
+
+    def test_export_registers_only(self, client):
+        self._seed(client)
+        response = client.get("/export?sections=registers")
+        assert response.status_code == 200
+        data = response.json()
+        assert "registers" in data
+        assert "servers" not in data
+        assert "slaves" not in data
+
+    def test_export_servers_slaves_only(self, client):
+        self._seed(client)
+        response = client.get("/export?sections=servers,slaves")
+        assert response.status_code == 200
+        data = response.json()
+        assert "servers" in data
+        assert "slaves" in data
+        assert "registers" not in data
+
+    def test_import_registers_only(self, client):
+        payload = {
+            "registers": [
+                {"slave_id": 0, "register_type": "hr", "address": 77, "simulate": True,
+                 "simulation_mode": "random", "simulation_config": {}}
+            ]
+        }
+        response = client.post("/import", json=payload)
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+
+        regs = client.get("/get-registers").json()["registers"]
+        assert any(r["address"] == 77 for r in regs)
+
+    def test_import_full_config(self, client):
+        payload = {
+            "servers": [{"server_id": 0, "ip": "0.0.0.0", "port": 502,
+                         "vendor_name": "Imported", "product_code": "I", "version": "1.0"}],
+            "slaves": [{"server_id": 0, "slave_id": 0, "co_size": 50,
+                        "di_size": 50, "hr_size": 50, "ir_size": 50}],
+            "registers": [{"slave_id": 0, "register_type": "ir", "address": 99, "simulate": True,
+                           "simulation_mode": "random", "simulation_config": {}}]
+        }
+        response = client.post("/import", json=payload)
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+
+        cfg = client.get("/get-server-config").json()
+        assert cfg["servers"][0]["vendor_name"] == "Imported"
+        assert cfg["slaves"][0]["co_size"] == 50
+
+    def test_import_empty_payload_fails(self, client):
+        response = client.post("/import", json={})
+        assert response.status_code == 200
+        assert response.json()["success"] is False
+
+    def test_restart_no_manager(self, client):
+        response = client.post("/restart")
+        assert response.status_code == 200
+        data = response.json()
+        # No server_manager in test fixture → graceful failure message
+        assert data["success"] is False
+        assert "manager" in data["message"].lower() or "restart" in data["message"].lower()

@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# AI generated files
+.claude/
+
 # C extensions
 *.so
 
@@ -29,10 +32,6 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
-
-# Hide claude files
-.claude/
-CLAUDE.md
 
 # PyInstaller
 #  Usually these files are written by a python script from a template

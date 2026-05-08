@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>modSim</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+<!-- Topbar -->
+<header class="topbar">
+  <button class="hamburger me-2" id="sidebarToggle" aria-label="Menu"><i class="bi bi-list"></i></button>
+  <span class="topbar-brand"><i class="bi bi-broadcast me-1"></i>modSim</span>
+  <div class="d-flex align-items-center gap-2 ms-auto">
+    <span class="topbar-status" id="navStatus">connecting…</span>
+    <button class="btn btn-sm btn-outline-secondary" style="font-size:.72rem;padding:.2rem .6rem" onclick="restartServers()" title="Restart Modbus servers">
+      <i class="bi bi-arrow-clockwise"></i> Restart
+    </button>
+  </div>
+</header>
+<div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+
+<!-- Sidebar -->
+<nav class="sidebar">
+  <a href="#" class="active" data-page="pDash"><i class="bi bi-speedometer2"></i>Dashboard</a>
+  <a href="#" data-page="pServer"><i class="bi bi-hdd-network"></i>Servers</a>
+  <a href="#" data-page="pRegs"><i class="bi bi-table"></i>Registers</a>
+  <a href="#" data-page="pLive"><i class="bi bi-activity"></i>Live View</a>
+  <div class="sidebar-divider"></div>
+  <a href="#" data-page="pImport"><i class="bi bi-arrow-left-right"></i>Import / Export</a>
+  <a href="#" data-page="pRef"><i class="bi bi-book"></i>Reference</a>
+</nav>
+
+<!-- Main -->
+<main class="main">
+
+  <!-- ── DASHBOARD ──────────────────────────────────────────────────────── -->
+  <div class="page" id="pDash">
+    <div class="page-title">Dashboard</div>
+    <div class="row g-3 mb-4">
+      <div class="col-6 col-md-3">
+        <div class="stat-card"><div class="stat-label">Servers Running</div><div class="stat-val" id="dServers">—</div></div>
+      </div>
+      <div class="col-6 col-md-3">
+        <div class="stat-card"><div class="stat-label">Slaves</div><div class="stat-val" id="dSlaves">—</div></div>
+      </div>
+      <div class="col-6 col-md-3">
+        <div class="stat-card"><div class="stat-label">Register Rules</div><div class="stat-val" id="dRegs">—</div></div>
+      </div>
+      <div class="col-6 col-md-3">
+        <div class="stat-card"><div class="stat-label">Web API</div><div class="stat-val text-success" style="font-size:1.1rem;padding-top:.35rem"><i class="bi bi-check-circle-fill"></i> OK</div></div>
+      </div>
+    </div>
+    <div class="row g-3">
+      <div class="col-md-6">
+        <div class="card">
+          <div class="card-header">Modbus Servers</div>
+          <div class="card-body p-0">
+            <table class="table table-sm table-hover mb-0" id="tServers">
+              <thead><tr><th>ID</th><th>Endpoint</th><th>Vendor</th><th>Status</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-6">
+        <div class="card">
+          <div class="card-header">Configured Slaves</div>
+          <div class="card-body p-0">
+            <table class="table table-sm table-hover mb-0" id="tSlaves">
+              <thead><tr><th>Srv</th><th>Slave</th><th>CO</th><th>DI</th><th>HR</th><th>IR</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── SERVERS ─────────────────────────────────────────────────────────── -->
+  <div class="page d-none" id="pServer">
+    <div class="page-title">Servers</div>
+
+    <!-- Server cards -->
+    <div id="serverCardsWrap" class="row g-3 mb-4"></div>
+
+    <!-- Add Server -->
+    <div class="card mb-4">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        Add / Update Server
+        <button class="btn btn-sm btn-primary" onclick="addServer()"><i class="bi bi-plus-lg me-1"></i>Save Server</button>
+      </div>
+      <div class="card-body">
+        <div class="row g-2">
+          <div class="col-4 col-md-2">
+            <label class="form-label">Server ID</label>
+            <input id="asId" type="number" class="form-control form-control-sm" value="0" min="0" />
+          </div>
+          <div class="col-8 col-md-4">
+            <label class="form-label">IP Address</label>
+            <input id="asIp" class="form-control form-control-sm" value="0.0.0.0" />
+          </div>
+          <div class="col-4 col-md-2">
+            <label class="form-label">Port</label>
+            <input id="asPort" type="number" class="form-control form-control-sm" value="502" />
+          </div>
+          <div class="col-8 col-md-4">
+            <label class="form-label">Vendor Name</label>
+            <input id="asVendor" class="form-control form-control-sm" value="ModbusSimulator" />
+          </div>
+          <div class="col-6 col-md-3">
+            <label class="form-label">Product Code</label>
+            <input id="asPcode" class="form-control form-control-sm" value="MSIM" />
+          </div>
+          <div class="col-6 col-md-3">
+            <label class="form-label">Version</label>
+            <input id="asVer" class="form-control form-control-sm" value="1.0" />
+          </div>
+        </div>
+        <hr class="my-2" style="border-color:#21262d" />
+        <small class="text-muted">Quick-add slaves for this server:</small>
+        <div class="row g-2 mt-1">
+          <div class="col-4 col-md-2">
+            <label class="form-label">Num Slaves</label>
+            <input id="asSlaves" type="number" class="form-control form-control-sm" value="1" min="1" />
+          </div>
+          <div class="col-4 col-md-2">
+            <label class="form-label">CO size</label>
+            <input id="asCo" type="number" class="form-control form-control-sm" value="100" />
+          </div>
+          <div class="col-4 col-md-2">
+            <label class="form-label">DI size</label>
+            <input id="asDi" type="number" class="form-control form-control-sm" value="100" />
+          </div>
+          <div class="col-4 col-md-2">
+            <label class="form-label">HR size</label>
+            <input id="asHr" type="number" class="form-control form-control-sm" value="100" />
+          </div>
+          <div class="col-4 col-md-2">
+            <label class="form-label">IR size</label>
+            <input id="asIr" type="number" class="form-control form-control-sm" value="100" />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Slaves table -->
+    <div class="card mb-4">
+      <div class="card-header">Configured Slaves</div>
+      <div class="card-body p-0">
+        <table class="table table-sm mb-0" id="tSlavesServer">
+          <thead><tr><th>Srv</th><th>Slave</th><th>CO</th><th>DI</th><th>HR</th><th>IR</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Quick batch setup (collapsed) -->
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Batch Setup <small class="text-muted fw-normal">(replaces all servers)</small></span>
+        <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#batchSetup">Toggle</button>
+      </div>
+      <div class="collapse" id="batchSetup">
+        <div class="card-body">
+          <div class="row g-2 mb-2">
+            <div class="col-8"><label class="form-label">IP</label><input id="qIp" class="form-control form-control-sm" value="0.0.0.0" /></div>
+            <div class="col-4"><label class="form-label">Base Port</label><input id="qPort" type="number" class="form-control form-control-sm" value="502" /></div>
+            <div class="col-6"><label class="form-label">Instances</label><input id="qInst" type="number" class="form-control form-control-sm" value="1" /></div>
+            <div class="col-6"><label class="form-label">Slaves / Instance</label><input id="qSlaves" type="number" class="form-control form-control-sm" value="1" /></div>
+            <div class="col-6"><label class="form-label">CO</label><input id="qCo" type="number" class="form-control form-control-sm" value="100" /></div>
+            <div class="col-6"><label class="form-label">DI</label><input id="qDi" type="number" class="form-control form-control-sm" value="100" /></div>
+            <div class="col-6"><label class="form-label">HR</label><input id="qHr" type="number" class="form-control form-control-sm" value="100" /></div>
+            <div class="col-6"><label class="form-label">IR</label><input id="qIr" type="number" class="form-control form-control-sm" value="100" /></div>
+          </div>
+          <button class="btn btn-primary btn-sm w-100" onclick="quickApply()">Apply Batch Config</button>
+
+          <hr class="my-3" style="border-color:#21262d" />
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <small class="text-muted fw-semibold">Advanced JSON</small>
+            <button class="btn btn-outline-secondary btn-sm" onclick="loadAdvanced()">Load current</button>
+          </div>
+          <textarea id="advJson" class="form-control code" rows="10" placeholder='{"servers":[…],"slaves":[…]}'></textarea>
+          <button class="btn btn-secondary btn-sm mt-2" onclick="advApply()">Apply JSON</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── REGISTERS ───────────────────────────────────────────────────────── -->
+  <div class="page d-none" id="pRegs">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <span class="page-title mb-0">Register Rules</span>
+      <div class="toolbar">
+        <button class="btn btn-sm btn-outline-secondary" onclick="loadRegs()"><i class="bi bi-arrow-clockwise me-1"></i>Refresh</button>
+        <button class="btn btn-sm btn-outline-secondary" onclick="exportConfig()"><i class="bi bi-download me-1"></i>Export</button>
+      </div>
+    </div>
+
+    <!-- Rules table -->
+    <div class="card mb-3">
+      <div class="card-body p-0" id="regsWrap">
+        <p class="text-muted p-3 mb-0">Click Refresh to load rules.</p>
+      </div>
+    </div>
+
+    <!-- Add Rule form -->
+    <div class="card mb-3">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        Add Rule
+        <button class="btn btn-sm btn-primary" onclick="addRule()"><i class="bi bi-plus-lg me-1"></i>Add Rule</button>
+      </div>
+      <div class="card-body">
+        <div class="row g-2">
+          <div class="col-6 col-md-2">
+            <label class="form-label">Server ID</label>
+            <input id="arSrv" type="number" class="form-control form-control-sm" placeholder="0" />
+          </div>
+          <div class="col-6 col-md-2">
+            <label class="form-label">Slave ID <span class="text-danger">*</span></label>
+            <input id="arSlave" type="number" class="form-control form-control-sm" value="0" min="0" />
+          </div>
+          <div class="col-6 col-md-2">
+            <label class="form-label">Type <span class="text-danger">*</span></label>
+            <select id="arType" class="form-select form-select-sm">
+              <option value="ir">ir — Input Regs</option>
+              <option value="hr">hr — Holding Regs</option>
+              <option value="co">co — Coils</option>
+              <option value="di">di — Discrete In</option>
+              <option value="all">all — All Types</option>
+            </select>
+          </div>
+          <div class="col-6 col-md-2">
+            <label class="form-label">Address</label>
+            <input id="arAddr" type="number" class="form-control form-control-sm" value="0" min="0" />
+          </div>
+          <div class="col-6 col-md-2">
+            <label class="form-label">Address End</label>
+            <input id="arEnd" type="number" class="form-control form-control-sm" placeholder="single" />
+          </div>
+          <div class="col-6 col-md-2">
+            <label class="form-label">Reg Size</label>
+            <input id="arSize" type="number" class="form-control form-control-sm" placeholder="default" />
+          </div>
+          <div class="col-6 col-md-3">
+            <label class="form-label">Mode</label>
+            <select id="arMode" class="form-select form-select-sm" onchange="fillModeDefaults()">
+              <option value="static">static</option>
+              <option value="random">random</option>
+              <option value="sine">sine</option>
+              <option value="ramp">ramp</option>
+              <option value="square">square</option>
+              <option value="equation">equation</option>
+            </select>
+          </div>
+          <div class="col-6 col-md-2">
+            <label class="form-label d-flex align-items-center gap-2 pt-3 mt-1">
+              <input id="arSim" type="checkbox" class="form-check-input" checked />
+              Simulate
+            </label>
+          </div>
+          <div class="col-12">
+            <label class="form-label">Simulation Config <small class="text-muted">(JSON)</small></label>
+            <textarea id="arConfig" class="form-control code" rows="2">{"value": 0}</textarea>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bulk JSON (collapsed) -->
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span>Bulk Replace <small class="text-muted fw-normal">(replaces all rules)</small></span>
+        <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#bulkRegs">Toggle</button>
+      </div>
+      <div class="collapse" id="bulkRegs">
+        <div class="card-body">
+          <textarea id="regJson" class="form-control code" rows="12">{
+  "registers": [
+    {
+      "server_id": 0, "slave_id": 0, "register_type": "ir",
+      "address": 0, "address_end": 9, "simulate": true,
+      "simulation_mode": "sine",
+      "simulation_config": {"amplitude": 100, "offset": 500, "period": 60}
+    }
+  ]
+}</textarea>
+          <button class="btn btn-primary btn-sm mt-2" onclick="regApply()">Replace All Rules</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── LIVE VIEW ─────────────────────────────────────────────────────────── -->
+  <div class="page d-none" id="pLive">
+    <div class="page-title">Live View</div>
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span class="d-flex align-items-center gap-2">
+          <span class="live-dot live-off" id="liveDot"></span>
+          Live Register Values
+        </span>
+        <div class="d-flex align-items-center gap-2">
+          <label class="form-label mb-0" style="color:#8b949e;font-size:.75rem">Server ID</label>
+          <input id="lSrv" type="number" value="0" class="form-control form-control-sm" style="width:60px" />
+          <button class="btn btn-sm btn-primary" onclick="toggleLive()" id="liveBtn">Start</button>
+        </div>
+      </div>
+      <div class="card-body p-0">
+        <table class="table table-sm table-hover mb-0">
+          <thead><tr><th>Slave</th><th>Type</th><th>Address</th><th>Value</th><th>Mode</th></tr></thead>
+          <tbody id="liveTbody">
+            <tr><td colspan="5" class="text-center py-4" style="color:#8b949e">Click Start to begin polling</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── IMPORT / EXPORT ───────────────────────────────────────────────────── -->
+  <div class="page d-none" id="pImport">
+    <div class="page-title">Import / Export</div>
+    <div class="row g-3">
+      <div class="col-md-5">
+        <div class="card h-100">
+          <div class="card-header"><i class="bi bi-download me-1"></i>Export</div>
+          <div class="card-body d-flex flex-column gap-2">
+            <p style="font-size:.8rem;color:#9daab6" class="mb-1">Choose which sections to include in the export.</p>
+            <div class="d-flex gap-3">
+              <label class="form-label mb-0 d-flex align-items-center gap-1"><input type="checkbox" id="exServers" class="form-check-input" checked /> Servers</label>
+              <label class="form-label mb-0 d-flex align-items-center gap-1"><input type="checkbox" id="exSlaves"  class="form-check-input" checked /> Slaves</label>
+              <label class="form-label mb-0 d-flex align-items-center gap-1"><input type="checkbox" id="exRegs"    class="form-check-input" checked /> Registers</label>
+            </div>
+            <div class="d-flex gap-2 mt-1">
+              <button class="btn btn-sm btn-primary" onclick="exportConfig()"><i class="bi bi-download me-1"></i>Download JSON</button>
+              <button class="btn btn-sm btn-outline-secondary" onclick="loadExportPreview()"><i class="bi bi-eye me-1"></i>Preview</button>
+            </div>
+            <label class="form-label mt-2">Preview</label>
+            <textarea id="exportPreview" class="form-control code" rows="12" readonly placeholder="Click Preview to load…"></textarea>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-7">
+        <div class="card h-100">
+          <div class="card-header"><i class="bi bi-upload me-1"></i>Import</div>
+          <div class="card-body d-flex flex-column gap-2">
+            <div class="import-warning"><i class="bi bi-exclamation-triangle-fill"></i>Only sections present in the JSON are replaced — omit a key to leave that section untouched.</div>
+            <label class="form-label mt-1">Load from file</label>
+            <div class="d-flex gap-2">
+              <input type="file" id="importFile" accept=".json" class="form-control form-control-sm" />
+              <button class="btn btn-sm btn-secondary flex-shrink-0" onclick="loadImportFile()">Load</button>
+            </div>
+            <label class="form-label mt-1">Or paste JSON</label>
+            <textarea id="importJson" class="form-control code" rows="12" placeholder='{"servers":[…],"slaves":[…],"registers":[…]}'></textarea>
+            <p style="font-size:.74rem;color:#9daab6" class="mb-0">Include only the sections you want to replace. E.g., <code>{"registers":[…]}</code> replaces only register rules.</p>
+            <button class="btn btn-sm btn-danger mt-1" onclick="applyImport()"><i class="bi bi-upload me-1"></i>Apply Import</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── REFERENCE ──────────────────────────────────────────────────────────── -->
+  <div class="page d-none" id="pRef">
+    <div class="page-title">Reference</div>
+    <div class="row g-3">
+      <div class="col-lg-6">
+        <div class="card p-3">
+          <h6 class="fw-semibold mb-3">Simulation Modes</h6>
+          <table class="table table-sm ref-table">
+            <thead><tr><th>Mode</th><th>Config keys</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td><code>static</code></td><td><code>value</code></td><td>Fixed value forever</td></tr>
+              <tr><td><code>random</code></td><td><code>min, max</code></td><td>Random integer each cycle (default 0–500)</td></tr>
+              <tr><td><code>ramp</code></td><td><code>min, max, step</code></td><td>Linear increment, wraps back to min</td></tr>
+              <tr><td><code>sine</code></td><td><code>amplitude, offset, period</code></td><td>Sine wave; period in simulation cycles (1 cycle ≈ 1 s)</td></tr>
+              <tr><td><code>square</code></td><td><code>high, low, period, duty_cycle</code></td><td>Square wave; duty_cycle 0.0–1.0</td></tr>
+              <tr><td><code>equation</code></td><td><code>equation</code></td><td>Python expression — vars: <code>x</code> (counter), <code>address</code>, <code>slave_id</code>, <code>server_id</code>, math functions</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="col-lg-6">
+        <div class="card p-3">
+          <h6 class="fw-semibold mb-3">Register Type Codes</h6>
+          <table class="table table-sm ref-table">
+            <thead><tr><th>Key</th><th>Modbus type</th><th>FC read</th><th>Data</th></tr></thead>
+            <tbody>
+              <tr><td><code>co</code></td><td>Coils</td><td>1</td><td>Boolean</td></tr>
+              <tr><td><code>di</code></td><td>Discrete Inputs</td><td>2</td><td>Boolean</td></tr>
+              <tr><td><code>hr</code></td><td>Holding Registers</td><td>3</td><td>16-bit uint</td></tr>
+              <tr><td><code>ir</code></td><td>Input Registers</td><td>4</td><td>16-bit uint</td></tr>
+              <tr><td><code>all</code></td><td>All four types</td><td>—</td><td>Writes whole block</td></tr>
+            </tbody>
+          </table>
+          <h6 class="fw-semibold mt-3 mb-2">Address Notes</h6>
+          <ul class="mb-0" style="font-size:.78rem;color:#8b949e">
+            <li>Addresses are <strong style="color:#c9d1d9">0-based</strong> integers.</li>
+            <li>Ignition OPC paths like <code>IR1136</code> map to 0-based address <strong style="color:#c9d1d9">1135</strong>.</li>
+            <li>Use <code>address_end</code> to configure a contiguous range in one rule.</li>
+            <li>Set <code>ir_size</code> ≥ highest address + 1 when configuring slaves.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="col-12">
+        <div class="card p-3">
+          <h6 class="fw-semibold mb-2">Example — multiple register rules</h6>
+          <pre class="code p-3 rounded mb-0">{
+  "registers": [
+    // Static flag registers (IR76–IR87, 0-based addrs 75–86)
+    {"server_id":0,"slave_id":1,"register_type":"ir",
+     "address":75,"address_end":86,"simulate":true,
+     "simulation_mode":"static","simulation_config":{"value":0}},
+
+    // Slow sine — SOC at IR1141 (0-based 1140), 5-min period
+    {"server_id":0,"slave_id":1,"register_type":"ir",
+     "address":1140,"simulate":true,"simulation_mode":"sine",
+     "simulation_config":{"amplitude":2,"offset":7,"period":300}},
+
+    // Equation-based sawtooth across holding registers
+    {"server_id":0,"slave_id":0,"register_type":"hr",
+     "address":0,"address_end":49,"simulate":true,
+     "simulation_mode":"equation",
+     "simulation_config":{"equation":"(x + address) % 1000"}}
+  ]
+}</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<div id="toastBox"></div>
+
+<!-- ── Edit Rule Modal ─────────────────────────────────────────────────────── -->
+<div class="modal fade" id="editRuleModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content" style="background:#161b22;border:1px solid #21262d;color:#e2e8f0">
+      <div class="modal-header" style="border-color:#21262d">
+        <h6 class="modal-title fw-semibold">Edit Rule <span id="erModalId" class="text-muted fw-normal"></span></h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="erRuleId" />
+        <div class="row g-2">
+          <div class="col-6 col-md-2">
+            <label class="form-label">Server ID</label>
+            <input id="erSrv" type="number" class="form-control form-control-sm" placeholder="optional" />
+          </div>
+          <div class="col-6 col-md-2">
+            <label class="form-label">Slave ID <span class="text-danger">*</span></label>
+            <input id="erSlave" type="number" class="form-control form-control-sm" value="0" min="0" />
+          </div>
+          <div class="col-6 col-md-2">
+            <label class="form-label">Type <span class="text-danger">*</span></label>
+            <select id="erType" class="form-select form-select-sm">
+              <option value="ir">ir — Input Regs</option>
+              <option value="hr">hr — Holding Regs</option>
+              <option value="co">co — Coils</option>
+              <option value="di">di — Discrete In</option>
+              <option value="all">all — All Types</option>
+            </select>
+          </div>
+          <div class="col-6 col-md-2">
+            <label class="form-label">Address</label>
+            <input id="erAddr" type="number" class="form-control form-control-sm" value="0" min="0" />
+          </div>
+          <div class="col-6 col-md-2">
+            <label class="form-label">Address End</label>
+            <input id="erEnd" type="number" class="form-control form-control-sm" placeholder="single" />
+          </div>
+          <div class="col-6 col-md-2">
+            <label class="form-label">Reg Size</label>
+            <input id="erSize" type="number" class="form-control form-control-sm" placeholder="default" />
+          </div>
+          <div class="col-6 col-md-3">
+            <label class="form-label">Mode</label>
+            <select id="erMode" class="form-select form-select-sm">
+              <option value="static">static</option>
+              <option value="random">random</option>
+              <option value="sine">sine</option>
+              <option value="ramp">ramp</option>
+              <option value="square">square</option>
+              <option value="equation">equation</option>
+            </select>
+          </div>
+          <div class="col-6 col-md-2">
+            <label class="form-label d-flex align-items-center gap-2 pt-3 mt-1">
+              <input id="erSim" type="checkbox" class="form-check-input" />
+              Simulate
+            </label>
+          </div>
+          <div class="col-12">
+            <label class="form-label">Simulation Config <small class="text-muted">(JSON)</small></label>
+            <textarea id="erConfig" class="form-control code" rows="3"></textarea>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer" style="border-color:#21262d">
+        <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary btn-sm" onclick="saveEditRule()"><i class="bi bi-check-lg me-1"></i>Save Rule</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Edit Server Modal ───────────────────────────────────────────────────── -->
+<div class="modal fade" id="editServerModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content" style="background:#161b22;border:1px solid #21262d;color:#e2e8f0">
+      <div class="modal-header" style="border-color:#21262d">
+        <h6 class="modal-title fw-semibold">Edit Server <span id="esModalId" class="text-muted fw-normal"></span></h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="esServerId" />
+        <div class="row g-2">
+          <div class="col-8">
+            <label class="form-label">IP Address</label>
+            <input id="esIp" class="form-control form-control-sm" />
+          </div>
+          <div class="col-4">
+            <label class="form-label">Port</label>
+            <input id="esPort" type="number" class="form-control form-control-sm" />
+          </div>
+          <div class="col-12">
+            <label class="form-label">Vendor Name</label>
+            <input id="esVendor" class="form-control form-control-sm" />
+          </div>
+          <div class="col-6">
+            <label class="form-label">Product Code</label>
+            <input id="esPcode" class="form-control form-control-sm" />
+          </div>
+          <div class="col-6">
+            <label class="form-label">Version</label>
+            <input id="esVer" class="form-control form-control-sm" />
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer" style="border-color:#21262d">
+        <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary btn-sm" onclick="saveEditServer()"><i class="bi bi-check-lg me-1"></i>Save Server</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

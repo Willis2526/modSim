@@ -1,6 +1,7 @@
 pymodbus
 fastapi
 uvicorn
+aiofiles
 
 # Testing dependencies
 pytest>=7.4.0
