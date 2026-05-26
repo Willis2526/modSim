@@ -289,6 +289,24 @@ class Database:
             logger.error(f"Error deleting server {server_id}: {e}")
             return {"success": False, "deleted": False, "errors": [str(e)]}
 
+    def delete_slave(self, server_id: int, slave_id: int) -> dict:
+        """Delete a slave by server_id and slave_id."""
+        try:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "DELETE FROM slaves WHERE server_id = ? AND slave_id = ?",
+                    (server_id, slave_id)
+                )
+                conn.commit()
+                return {"success": True, "deleted": cursor.rowcount > 0, "errors": []}
+            finally:
+                conn.close()
+        except sqlite3.Error as e:
+            logger.error(f"Error deleting slave {server_id}/{slave_id}: {e}")
+            return {"success": False, "deleted": False, "errors": [str(e)]}
+
     def save_registers(self, registers):
         try:
             conn = self._get_connection()

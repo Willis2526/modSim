@@ -1,153 +1,116 @@
-""" Handles Modbus objects """
+"""Handles Modbus objects"""
 import logging
-import math
+import struct
 import threading
 
 from pymodbus import ModbusDeviceIdentification
 from pymodbus.datastore import ModbusServerContext
-from pymodbus.datastore.context import ExcCodes, ModbusSimulatorContext
 from pymodbus.server import StartTcpServer
+from pymodbus.simulator.simdata import SimData, DataType
+from pymodbus.simulator.simdevice import SimDevice
+from pymodbus.simulator.simcore import SimCore
 from modSim.simulator import SimulationEngine
 
 logger = logging.getLogger(__name__)
 
 _BITS_FC = frozenset((1, 2, 5, 15))
+_FC_BLOCK = {1: 'c', 2: 'd', 3: 'h', 4: 'i', 5: 'c', 15: 'c'}
 
 
 class _SimContext(ModbusServerContext):
-    """Multi-slave context built on ModbusSimulatorContext per slave.
+    """Multi-slave context built on SimCore/SimRuntime.
 
-    Subclasses ModbusServerContext so pymodbus 3.13's server uses it
-    directly (via the `not simdevices` branch) instead of wrapping it in
-    SimCore, which only accepts SimDevice objects.  __init__ intentionally
-    does NOT call super().__init__() to avoid the deprecation log warning.
+    Subclasses ModbusServerContext so pymodbus's server treats it as a
+    ready-made context (the `not simdevices` branch) without wrapping it
+    in a second SimCore. __init__ intentionally does NOT call
+    super().__init__() to avoid the ModbusServerContext deprecation log.
     """
 
-    simdevices = []  # falsy → server skips the SimCore wrapping path
+    simdevices = []  # falsy → server skips SimCore wrapping
 
-    def __init__(self, devices: dict):
-        # devices: {slave_id (int): ModbusSimulatorContext}
-        # Deliberately skip super().__init__() — it logs a deprecation warning
-        # and its validation logic is not needed here.
-        self._devices = devices
+    def __init__(self, devices: list[SimDevice]):
+        self._simcore = SimCore(devices)
+        self._runtimes = self._simcore.devices  # {slave_id: SimRuntime}
 
     def device_ids(self) -> list:
-        return list(self._devices.keys())
-
-    def _get_device(self, device_id: int):
-        if device_id in self._devices:
-            return self._devices[device_id]
-        return next(iter(self._devices.values()), None)
+        return list(self._runtimes.keys())
 
     async def async_getValues(self, device_id: int, func_code: int, address: int, count: int = 1):
-        dev = self._get_device(device_id)
-        if dev is None:
-            return ExcCodes.ILLEGAL_ADDRESS
-        return await dev.async_OLD_getValues(func_code, address, count)
+        return await self._simcore.async_getValues(device_id, func_code, address, count)
 
     async def async_setValues(self, device_id: int, func_code: int, address: int, values):
-        dev = self._get_device(device_id)
-        if dev is None:
-            return ExcCodes.ILLEGAL_ADDRESS
-        return await dev.async_OLD_setValues(func_code, address, values)
+        return await self._simcore.async_setValues(device_id, func_code, address, values)
 
 
-def _build_slave_context(co_size=100, di_size=100, hr_size=100, ir_size=100):
-    """Build one ModbusSimulatorContext for a single slave."""
-    co_cells = math.ceil(max(co_size, 1) / 16)
-    di_cells = math.ceil(max(di_size, 1) / 16)
-    ir_cells = max(ir_size, 1)
-    hr_cells = max(hr_size, 1)
-    total = co_cells + di_cells + ir_cells + hr_cells
-
-    config = {
-        "setup": {
-            "co size": co_cells,
-            "di size": di_cells,
-            "ir size": ir_cells,
-            "hr size": hr_cells,
-            "shared blocks": False,
-            "defaults": {
-                "value": {
-                    "bits": 0, "uint16": 0, "uint32": 0,
-                    "float32": 0.0, "string": " ",
-                },
-                "action": {
-                    "bits": None, "uint16": None, "uint32": None,
-                    "float32": None, "string": None,
-                },
-            },
-            "type exception": False,
-        },
-        "invalid": [],
-        "write": [[0, total - 1]],
-        "bits": [[0, co_cells + di_cells - 1]],
-        "uint16": [[co_cells + di_cells, total - 1]],
-        "uint32": [],
-        "float32": [],
-        "string": [],
-        "repeat": [],
-    }
-    return ModbusSimulatorContext(config, None)
+def _build_slave_simdevice(slave_id: int, co_size=100, di_size=100,
+                            hr_size=100, ir_size=100) -> SimDevice:
+    """Build one SimDevice for a single slave."""
+    return SimDevice(slave_id, simdata=(
+        [SimData(0, count=max(co_size, 1), values=False, datatype=DataType.BITS)],
+        [SimData(0, count=max(di_size, 1), values=False, datatype=DataType.BITS)],
+        [SimData(0, count=max(hr_size, 1), values=0,     datatype=DataType.REGISTERS)],
+        [SimData(0, count=max(ir_size, 1), values=0,     datatype=DataType.REGISTERS)],
+    ))
 
 
 def buildModbusContext(number_of_slaves, register_sizes=None):
-    """Build a ModbusServerContext with one ModbusSimulatorContext per slave."""
+    """Build a _SimContext with one SimDevice per slave."""
     if register_sizes is None:
         register_sizes = {"co": 100, "di": 100, "hr": 100, "ir": 100}
-
-    slaves = {}
-    for slave_id in range(number_of_slaves):
-        slaves[slave_id] = _build_slave_context(
+    devices = [
+        _build_slave_simdevice(
+            slave_id,
             co_size=register_sizes.get("co", 100),
             di_size=register_sizes.get("di", 100),
             hr_size=register_sizes.get("hr", 100),
             ir_size=register_sizes.get("ir", 100),
         )
-    return _SimContext(slaves)
+        for slave_id in range(number_of_slaves)
+    ]
+    return _SimContext(devices)
 
 
-def _ctx_write(slave_ctx, fc, address, values):
-    """Write values directly into a ModbusSimulatorContext registers list."""
+def _ctx_write(runtime, fc: int, address: int, values):
+    """Write values directly into a SimRuntime block."""
+    block_key = _FC_BLOCK.get(fc, 'h')
+    start, _, registers, _ = runtime.block[block_key]
+    offset = address - start
     if fc in _BITS_FC:
         for i, v in enumerate(values):
-            addr = address + i
-            real = slave_ctx.fc_offset[fc] + addr // 16
-            bit = addr % 16
-            if real >= len(slave_ctx.registers):
+            a = offset + i
+            word = a // 16
+            bit  = a % 16
+            if word >= len(registers):
                 continue
             if v:
-                slave_ctx.registers[real].value |= (1 << bit)
+                registers[word] |= (1 << bit)
             else:
-                slave_ctx.registers[real].value &= ~(1 << bit)
+                registers[word] &= ~(1 << bit)
     else:
         for i, v in enumerate(values):
-            real = slave_ctx.fc_offset[fc] + address + i
-            if real >= len(slave_ctx.registers):
-                continue
-            slave_ctx.registers[real].value = int(v)
+            idx = offset + i
+            if 0 <= idx < len(registers):
+                registers[idx] = int(v)
 
 
-def _ctx_read(slave_ctx, fc, address, count=1):
-    """Read values directly from a ModbusSimulatorContext registers list."""
-    result = []
+def _ctx_read(runtime, fc: int, address: int, count: int = 1):
+    """Read values directly from a SimRuntime block."""
+    block_key = _FC_BLOCK.get(fc, 'h')
+    start, _, registers, _ = runtime.block[block_key]
+    offset = address - start
     if fc in _BITS_FC:
+        result = []
         for i in range(count):
-            addr = address + i
-            real = slave_ctx.fc_offset[fc] + addr // 16
-            bit = addr % 16
-            if real >= len(slave_ctx.registers):
+            a = offset + i
+            word = a // 16
+            bit  = a % 16
+            if word >= len(registers):
                 result.append(False)
             else:
-                result.append(bool(slave_ctx.registers[real].value & (1 << bit)))
+                result.append(bool(registers[word] & (1 << bit)))
+        return result
     else:
-        for i in range(count):
-            real = slave_ctx.fc_offset[fc] + address + i
-            if real >= len(slave_ctx.registers):
-                result.append(0)
-            else:
-                result.append(slave_ctx.registers[real].value)
-    return result
+        return list(registers[offset:offset + count])
 
 
 class Server(threading.Thread):
@@ -190,21 +153,38 @@ class Server(threading.Thread):
     def get_context(self, slave=None):
         if slave is None:
             return self.context
-        return self.context._devices.get(slave)
+        return self.context._runtimes.get(slave)
 
     def read_registers(self, slave_id, fc, address, count=1):
         """Read values from a slave's register space."""
-        slave_ctx = self.context._devices.get(slave_id)
-        if slave_ctx is None:
+        runtime = self.context._runtimes.get(slave_id)
+        if runtime is None:
             return []
-        return _ctx_read(slave_ctx, fc, address, count)
+        return _ctx_read(runtime, fc, address, count)
 
     def write_registers(self, slave_id, fc, address, values):
         """Write values into a slave's register space."""
-        slave_ctx = self.context._devices.get(slave_id)
-        if slave_ctx is None:
+        runtime = self.context._runtimes.get(slave_id)
+        if runtime is None:
             return
-        _ctx_write(slave_ctx, fc, address, values)
+        _ctx_write(runtime, fc, address, values)
+
+    def write_float_registers(self, slave_id, address, float_values, fc=3):
+        """Encode each float32 as two big-endian uint16 words and write to HR/IR."""
+        words = []
+        for v in float_values:
+            hi, lo = struct.unpack('>HH', struct.pack('>f', float(v)))
+            words.extend([hi, lo])
+        self.write_registers(slave_id, fc, address, words)
+
+    def read_float_registers(self, slave_id, address, count=1, fc=3):
+        """Read count float32 values (2 raw registers each) from HR/IR."""
+        raw = self.read_registers(slave_id, fc, address, count * 2)
+        result = []
+        for i in range(count):
+            hi, lo = raw[i * 2], raw[i * 2 + 1]
+            result.append(struct.unpack('>f', struct.pack('>HH', hi, lo))[0])
+        return result
 
     def run(self):
         ident = ModbusDeviceIdentification()
@@ -257,8 +237,8 @@ class Server(threading.Thread):
                 continue
 
             slave_id = reg.get("slave_id")
-            slave_ctx = self.context._devices.get(slave_id)
-            if slave_ctx is None:
+            runtime = self.context._runtimes.get(slave_id)
+            if runtime is None:
                 logger.warning("Slave ID %s not in context; skipping.", slave_id)
                 continue
 
@@ -270,22 +250,26 @@ class Server(threading.Thread):
             simulation_mode = reg.get("simulation_mode", "random")
             simulation_config = reg.get("simulation_config", {})
             register_size_override = reg.get("register_size")
+            use_float32 = bool(simulation_config.get("float32", False))
+
+            def _gen_value(kind, addr):
+                return self.simulation_engine.generate_value(
+                    simulation_mode, simulation_config, kind,
+                    addr, slave_id, self.serverId, float32=use_float32,
+                )
 
             def _gen_block(kind, count, start_addr=0):
-                return [
-                    self.simulation_engine.generate_value(
-                        simulation_mode, simulation_config, kind,
-                        start_addr + i, slave_id, self.serverId,
-                    )
-                    for i in range(count)
-                ]
+                return [_gen_value(kind, start_addr + i) for i in range(count)]
 
             def _write_full(kind):
                 fc = register_type_map[kind]
                 size = (register_size_override if register_size_override is not None
                         else self.registerSizes.get(kind, self.numberOfRegisters))
-                values = _gen_block(kind, size, 0)
-                _ctx_write(slave_ctx, fc, 0, values)
+                if use_float32 and kind in ("hr", "ir"):
+                    float_count = size // 2
+                    self.write_float_registers(slave_id, 0, _gen_block(kind, float_count, 0), fc=fc)
+                else:
+                    _ctx_write(runtime, fc, 0, _gen_block(kind, size, 0))
 
             if reg_type_key == "all":
                 for kind in ("co", "di", "hr", "ir"):
@@ -298,22 +282,29 @@ class Server(threading.Thread):
             max_size = (register_size_override if register_size_override is not None
                         else self.registerSizes.get(reg_type_key, self.numberOfRegisters))
 
+            is_numeric = reg_type_key in ("hr", "ir")
+
             if addr_end is not None:
                 addr_end = int(addr_end)
                 if 0 <= addr_start < max_size and 0 <= addr_end < max_size and addr_start <= addr_end:
-                    values = _gen_block(reg_type_key, addr_end - addr_start + 1, addr_start)
-                    _ctx_write(slave_ctx, reg_type_code, addr_start, values)
+                    if use_float32 and is_numeric:
+                        # addr_start..addr_end are physical registers; each float32 = 2 registers
+                        float_count = (addr_end - addr_start + 1) // 2
+                        floats = _gen_block(reg_type_key, float_count, addr_start)
+                        self.write_float_registers(slave_id, addr_start, floats, fc=reg_type_code)
+                    else:
+                        values = _gen_block(reg_type_key, addr_end - addr_start + 1, addr_start)
+                        _ctx_write(runtime, reg_type_code, addr_start, values)
                 else:
                     logger.warning(
                         "Address range %s..%s out of range 0..%s for slave %s (%s).",
                         addr_start, addr_end, max_size - 1, slave_id, reg_type_key,
                     )
             elif 0 <= addr_start < max_size:
-                value = self.simulation_engine.generate_value(
-                    simulation_mode, simulation_config,
-                    reg_type_key, addr_start, slave_id, self.serverId,
-                )
-                _ctx_write(slave_ctx, reg_type_code, addr_start, [value])
+                if use_float32 and is_numeric:
+                    self.write_float_registers(slave_id, addr_start, [_gen_value(reg_type_key, addr_start)], fc=reg_type_code)
+                else:
+                    _ctx_write(runtime, reg_type_code, addr_start, [_gen_value(reg_type_key, addr_start)])
             else:
                 logger.warning(
                     "Address %s out of range 0..%s for slave %s (%s).",

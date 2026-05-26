@@ -1,6 +1,9 @@
 'use strict';
 
 let liveTimer = null;
+var _editServerData = {};
+var _editRuleData   = {};
+var _editSlaveData  = {};
 
 // ── Sidebar navigation ────────────────────────────────────────────────────────
 document.querySelectorAll('.sidebar a[data-page]').forEach(function(link) {
@@ -57,12 +60,14 @@ async function loadServers() {
         return;
     }
 
+    _editServerData = {};
+    res.servers.forEach(function(s) { _editServerData[s.server_id] = s; });
     wrap.innerHTML = res.servers.length
         ? res.servers.map(function(s) {
             return '<div class="col-sm-6 col-lg-4">' +
                    '<div class="server-card">' +
                    '<div class="position-absolute top-0 end-0 m-2 d-flex gap-1">' +
-                   '<button class="btn-row-del" onclick="openEditServer(' + JSON.stringify(s) + ')" title="Edit server">' +
+                   '<button class="btn-row-edit" onclick="openEditServer(_editServerData[' + s.server_id + '])" title="Edit server">' +
                    '<i class="bi bi-pencil"></i></button>' +
                    '<button class="btn-row-del" onclick="deleteServer(' + s.server_id + ')" title="Delete server">' +
                    '<i class="bi bi-x-lg"></i></button>' +
@@ -74,10 +79,17 @@ async function loadServers() {
           }).join('')
         : '<div class="col-12"><p class="text-muted">No servers configured.</p></div>';
 
+    _editSlaveData = {};
+    res.slaves.forEach(function(s) { _editSlaveData[s.server_id + '_' + s.slave_id] = s; });
     tbl('tSlavesServer', res.slaves, function(s) {
+        var key = s.server_id + '_' + s.slave_id;
         return '<td>' + s.server_id + '</td><td>' + s.slave_id + '</td>' +
                '<td>' + s.co_size + '</td><td>' + s.di_size + '</td>' +
-               '<td>' + s.hr_size + '</td><td>' + s.ir_size + '</td>';
+               '<td>' + s.hr_size + '</td><td>' + s.ir_size + '</td>' +
+               '<td class="d-flex gap-1">' +
+               '<button class="btn-row-edit" onclick="openEditSlave(_editSlaveData[\'' + key + '\'])" title="Edit slave"><i class="bi bi-pencil"></i></button>' +
+               '<button class="btn-row-del" onclick="deleteSlave(' + s.server_id + ',' + s.slave_id + ')" title="Delete slave"><i class="bi bi-trash3"></i></button>' +
+               '</td>';
     });
 }
 
@@ -170,6 +182,8 @@ async function loadRegs() {
         return;
     }
 
+    _editRuleData = {};
+    rows.forEach(function(r) { _editRuleData[r.id] = r; });
     wrap.innerHTML =
         '<div class="table-responsive">' +
         '<table class="table table-sm table-hover mb-0" id="rulesTable">' +
@@ -178,6 +192,10 @@ async function loadRegs() {
           '<th>Addr</th><th>End</th><th>Mode</th><th>Config</th><th></th>' +
         '</tr></thead><tbody>' +
         rows.map(function(r) {
+            var cfg = r.simulation_config || {};
+            var f32badge = cfg.float32 ? ' <span class="badge bg-warning text-dark" style="font-size:.6rem;vertical-align:middle">f32</span>' : '';
+            var cfgDisplay = Object.assign({}, cfg);
+            delete cfgDisplay.float32;
             return '<tr>' +
                 '<td style="color:#5a6470">' + r.id + '</td>' +
                 '<td>' + (r.server_id != null ? r.server_id : '<span style="color:#5a6470">—</span>') + '</td>' +
@@ -185,10 +203,10 @@ async function loadRegs() {
                 '<td><code style="color:#6cb6ff">' + r.register_type + '</code></td>' +
                 '<td>' + (r.address     != null ? r.address     : '—') + '</td>' +
                 '<td>' + (r.address_end != null ? r.address_end : '—') + '</td>' +
-                '<td><span class="badge bg-info text-dark mode-badge">' + (r.simulation_mode || '—') + '</span></td>' +
-                '<td><small style="color:#9daab6">' + JSON.stringify(r.simulation_config || {}) + '</small></td>' +
+                '<td><span class="badge bg-info text-dark mode-badge">' + (r.simulation_mode || '—') + '</span>' + f32badge + '</td>' +
+                '<td><small style="color:#9daab6">' + JSON.stringify(cfgDisplay) + '</small></td>' +
                 '<td class="d-flex gap-1">' +
-                '<button class="btn-row-del" onclick="openEditRule(' + JSON.stringify(r) + ')" title="Edit rule"><i class="bi bi-pencil"></i></button>' +
+                '<button class="btn-row-edit" onclick="openEditRule(_editRuleData[' + r.id + '])" title="Edit rule"><i class="bi bi-pencil"></i></button>' +
                 '<button class="btn-row-del" onclick="deleteRule(' + r.id + ')" title="Delete rule"><i class="bi bi-trash3"></i></button>' +
                 '</td>' +
                 '</tr>';
@@ -208,6 +226,10 @@ async function addRule() {
     var simConfig;
     try { simConfig = JSON.parse(configRaw); }
     catch (e) { toast('simulation_config: invalid JSON — ' + e.message, 'danger'); return; }
+
+    // Float32 checkbox is authoritative — sync it into the config object
+    if (document.getElementById('arFloat32').checked) simConfig.float32 = true;
+    else delete simConfig.float32;
 
     var srvVal = document.getElementById('arSrv').value.trim();
     var endVal = document.getElementById('arEnd').value.trim();
@@ -233,10 +255,18 @@ async function addRule() {
     if (res.success) loadRegs();
 }
 
-// Auto-fill sensible default configs when mode changes
+// Auto-fill sensible default configs when mode or float32 changes
 function fillModeDefaults() {
     var mode = val('arMode');
-    var defaults = {
+    var f32 = document.getElementById('arFloat32').checked;
+    var defaults = f32 ? {
+        static:   '{"value": 0.0}',
+        random:   '{"min": 0.0, "max": 500.0}',
+        sine:     '{"amplitude": 100.0, "offset": 500.0, "period": 60}',
+        ramp:     '{"min": 0.0, "max": 1000.0, "step": 0.5}',
+        square:   '{"high": 100.0, "low": 0.0, "period": 20, "duty_cycle": 0.5}',
+        equation: '{"equation": "sin(x * 0.1) * 100"}'
+    } : {
         static:   '{"value": 0}',
         random:   '{"min": 0, "max": 500}',
         sine:     '{"amplitude": 100, "offset": 500, "period": 60}',
@@ -260,6 +290,7 @@ async function regApply() {
 var _editRuleModal = null;
 
 function openEditRule(r) {
+    var cfg = r.simulation_config || {};
     document.getElementById('erRuleId').value    = r.id;
     document.getElementById('erModalId').textContent = '#' + r.id;
     document.getElementById('erSrv').value       = r.server_id != null ? r.server_id : '';
@@ -270,7 +301,11 @@ function openEditRule(r) {
     document.getElementById('erSize').value      = r.register_size != null ? r.register_size : '';
     document.getElementById('erMode').value      = r.simulation_mode || 'static';
     document.getElementById('erSim').checked     = !!r.simulate;
-    document.getElementById('erConfig').value    = JSON.stringify(r.simulation_config || {}, null, 2);
+    document.getElementById('erFloat32').checked = !!cfg.float32;
+    // Show config without the float32 key — the checkbox owns it
+    var display = Object.assign({}, cfg);
+    delete display.float32;
+    document.getElementById('erConfig').value    = JSON.stringify(display, null, 2);
     if (!_editRuleModal) _editRuleModal = new bootstrap.Modal(document.getElementById('editRuleModal'));
     _editRuleModal.show();
 }
@@ -281,6 +316,10 @@ async function saveEditRule() {
     var simConfig;
     try { simConfig = JSON.parse(configRaw); }
     catch (e) { toast('simulation_config: invalid JSON — ' + e.message, 'danger'); return; }
+
+    // Float32 checkbox is authoritative
+    if (document.getElementById('erFloat32').checked) simConfig.float32 = true;
+    else delete simConfig.float32;
 
     var srvVal  = document.getElementById('erSrv').value.trim();
     var endVal  = document.getElementById('erEnd').value.trim();
@@ -333,6 +372,44 @@ async function saveEditServer() {
     if (res.success) { _editServerModal.hide(); loadServers(); }
 }
 
+// ── Edit slave modal ──────────────────────────────────────────────────────────
+var _editSlaveModal = null;
+
+function openEditSlave(s) {
+    document.getElementById('slServerId').value      = s.server_id;
+    document.getElementById('slSlaveId').value       = s.slave_id;
+    document.getElementById('slModalId').textContent = 'Srv ' + s.server_id + ' / Slave ' + s.slave_id;
+    document.getElementById('slCo').value = s.co_size;
+    document.getElementById('slDi').value = s.di_size;
+    document.getElementById('slHr').value = s.hr_size;
+    document.getElementById('slIr').value = s.ir_size;
+    if (!_editSlaveModal) _editSlaveModal = new bootstrap.Modal(document.getElementById('editSlaveModal'));
+    _editSlaveModal.show();
+}
+
+async function saveEditSlave() {
+    var serverId = parseInt(document.getElementById('slServerId').value, 10);
+    var slaveId  = parseInt(document.getElementById('slSlaveId').value,  10);
+    var body = {
+        server_id: serverId,
+        slave_id:  slaveId,
+        co_size:   parseInt(document.getElementById('slCo').value, 10),
+        di_size:   parseInt(document.getElementById('slDi').value, 10),
+        hr_size:   parseInt(document.getElementById('slHr').value, 10),
+        ir_size:   parseInt(document.getElementById('slIr').value, 10)
+    };
+    var res = await api('/slaves/' + serverId + '/' + slaveId, 'PUT', body);
+    toast(res.message || (res.success ? 'Saved' : 'Error'), res.success ? 'success' : 'danger');
+    if (res.success) { _editSlaveModal.hide(); loadServers(); }
+}
+
+async function deleteSlave(serverId, slaveId) {
+    if (!confirm('Delete slave ' + slaveId + ' from server ' + serverId + '?')) return;
+    var res = await api('/slaves/' + serverId + '/' + slaveId, 'DELETE');
+    toast(res.message || (res.success ? 'Deleted' : 'Error'), res.success ? 'success' : 'danger');
+    if (res.success) loadServers();
+}
+
 // ── Live view ─────────────────────────────────────────────────────────────────
 function toggleLive() {
     if (liveTimer) {
@@ -362,11 +439,13 @@ async function fetchLive() {
     }
 
     tbody.innerHTML = res.values.map(function(v) {
+        var valStr = v.value != null ? String(v.value) : '—';
+        var f32badge = v.float32 ? ' <span class="badge bg-warning text-dark" style="font-size:.6rem">f32</span>' : '';
         return '<tr>' +
             '<td>' + v.slave_id + '</td>' +
             '<td><code style="color:#6cb6ff">' + v.register_type + '</code></td>' +
             '<td>' + v.address + '</td>' +
-            '<td><strong>' + v.value + '</strong></td>' +
+            '<td><strong>' + valStr + '</strong>' + f32badge + '</td>' +
             '<td><span class="badge bg-info text-dark mode-badge">' + (v.simulation_mode || '') + '</span></td>' +
             '</tr>';
     }).join('');

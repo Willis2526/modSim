@@ -152,7 +152,7 @@
       <div class="card-header">Configured Slaves</div>
       <div class="card-body p-0">
         <table class="table table-sm mb-0" id="tSlavesServer">
-          <thead><tr><th>Srv</th><th>Slave</th><th>CO</th><th>DI</th><th>HR</th><th>IR</th></tr></thead>
+          <thead><tr><th>Srv</th><th>Slave</th><th>CO</th><th>DI</th><th>HR</th><th>IR</th><th></th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -260,6 +260,12 @@
             <label class="form-label d-flex align-items-center gap-2 pt-3 mt-1">
               <input id="arSim" type="checkbox" class="form-check-input" checked />
               Simulate
+            </label>
+          </div>
+          <div class="col-6 col-md-2">
+            <label class="form-label d-flex align-items-center gap-2 pt-3 mt-1" title="Encode each value as two consecutive 16-bit registers (HR/IR only). Address end must span an even number of registers.">
+              <input id="arFloat32" type="checkbox" class="form-check-input" onchange="fillModeDefaults()" />
+              Float32 <i class="bi bi-info-circle" style="font-size:.75rem;color:#6e7a84"></i>
             </label>
           </div>
           <div class="col-12">
@@ -374,11 +380,12 @@
             <thead><tr><th>Mode</th><th>Config keys</th><th>Description</th></tr></thead>
             <tbody>
               <tr><td><code>static</code></td><td><code>value</code></td><td>Fixed value forever</td></tr>
-              <tr><td><code>random</code></td><td><code>min, max</code></td><td>Random integer each cycle (default 0–500)</td></tr>
+              <tr><td><code>random</code></td><td><code>min, max</code></td><td>Random integer each cycle (default 0–500); float when <code>float32</code> enabled</td></tr>
               <tr><td><code>ramp</code></td><td><code>min, max, step</code></td><td>Linear increment, wraps back to min</td></tr>
               <tr><td><code>sine</code></td><td><code>amplitude, offset, period</code></td><td>Sine wave; period in simulation cycles (1 cycle ≈ 1 s)</td></tr>
               <tr><td><code>square</code></td><td><code>high, low, period, duty_cycle</code></td><td>Square wave; duty_cycle 0.0–1.0</td></tr>
               <tr><td><code>equation</code></td><td><code>equation</code></td><td>Python expression — vars: <code>x</code> (counter), <code>address</code>, <code>slave_id</code>, <code>server_id</code>, math functions</td></tr>
+              <tr><td colspan="3" style="background:#0d1117;padding:.4rem .75rem"><span class="badge bg-warning text-dark me-1">float32</span> Add <code>"float32": true</code> to any config to encode values as IEEE 754 float32 across <strong>two consecutive HR/IR registers</strong>. Address range must span an even count. Live view shows the decoded float.</td></tr>
             </tbody>
           </table>
         </div>
@@ -494,6 +501,12 @@
               Simulate
             </label>
           </div>
+          <div class="col-6 col-md-2">
+            <label class="form-label d-flex align-items-center gap-2 pt-3 mt-1" title="Encode each value as two consecutive 16-bit registers (HR/IR only). Address end must span an even number of registers.">
+              <input id="erFloat32" type="checkbox" class="form-check-input" />
+              Float32 <i class="bi bi-info-circle" style="font-size:.75rem;color:#6e7a84"></i>
+            </label>
+          </div>
           <div class="col-12">
             <label class="form-label">Simulation Config <small class="text-muted">(JSON)</small></label>
             <textarea id="erConfig" class="form-control code" rows="3"></textarea>
@@ -503,6 +516,44 @@
       <div class="modal-footer" style="border-color:#21262d">
         <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
         <button type="button" class="btn btn-primary btn-sm" onclick="saveEditRule()"><i class="bi bi-check-lg me-1"></i>Save Rule</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Edit Slave Modal ─────────────────────────────────────────────────────── -->
+<div class="modal fade" id="editSlaveModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content" style="background:#161b22;border:1px solid #21262d;color:#e2e8f0">
+      <div class="modal-header" style="border-color:#21262d">
+        <h6 class="modal-title fw-semibold">Edit Slave <span id="slModalId" class="text-muted fw-normal"></span></h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="slServerId" />
+        <input type="hidden" id="slSlaveId" />
+        <div class="row g-2">
+          <div class="col-6">
+            <label class="form-label">CO size</label>
+            <input id="slCo" type="number" class="form-control form-control-sm" min="0" />
+          </div>
+          <div class="col-6">
+            <label class="form-label">DI size</label>
+            <input id="slDi" type="number" class="form-control form-control-sm" min="0" />
+          </div>
+          <div class="col-6">
+            <label class="form-label">HR size</label>
+            <input id="slHr" type="number" class="form-control form-control-sm" min="0" />
+          </div>
+          <div class="col-6">
+            <label class="form-label">IR size</label>
+            <input id="slIr" type="number" class="form-control form-control-sm" min="0" />
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer" style="border-color:#21262d">
+        <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary btn-sm" onclick="saveEditSlave()"><i class="bi bi-check-lg me-1"></i>Save Slave</button>
       </div>
     </div>
   </div>

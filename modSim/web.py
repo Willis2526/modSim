@@ -1,4 +1,5 @@
 import argparse
+import struct
 from pathlib import Path
 from pydantic import BaseModel
 import logging
@@ -447,6 +448,22 @@ class WebServer(threading.Thread):
             summary="Delete a server",
             description="Removes a server and all its slave records (cascades). Triggers a Modbus server restart.",
         )
+        self.app.add_api_route(
+            path="/slaves/{server_id}/{slave_id}",
+            endpoint=self.update_slave_handler,
+            methods=["PUT"],
+            tags=["Servers"],
+            summary="Update a slave",
+            description="Updates the register sizes of an existing slave. Triggers a Modbus server restart.",
+        )
+        self.app.add_api_route(
+            path="/slaves/{server_id}/{slave_id}",
+            endpoint=self.delete_slave_handler,
+            methods=["DELETE"],
+            tags=["Servers"],
+            summary="Delete a slave",
+            description="Removes a slave from a server. Triggers a Modbus server restart.",
+        )
 
         # ── Register Rules ────────────────────────────────────────────────────
         self.app.add_api_route(
@@ -606,32 +623,60 @@ class WebServer(threading.Thread):
                 func_code = reg_type_codes[reg_type]
                 addr_start = int(reg.get("address", 0))
                 addr_end = reg.get("address_end")
+                sim_config = reg.get("simulation_config") or {}
+                use_float32 = bool(sim_config.get("float32")) and reg_type in ("hr", "ir")
+
+                def _decode_float(hi, lo):
+                    return round(struct.unpack('>f', struct.pack('>HH', hi, lo))[0], 6)
 
                 try:
                     if addr_end is not None:
-                        count = min(int(addr_end) - addr_start + 1, 50)
-                        raw = modbus_server.read_registers(slave_id, func_code, addr_start, count)
-                        for i, v in enumerate(raw):
+                        phys_count = min(int(addr_end) - addr_start + 1, 50)
+                        raw = modbus_server.read_registers(slave_id, func_code, addr_start, phys_count)
+                        if use_float32:
+                            for i in range(0, len(raw) - 1, 2):
+                                values.append({
+                                    "slave_id": slave_id,
+                                    "register_type": reg_type,
+                                    "address": addr_start + i,
+                                    "value": _decode_float(raw[i], raw[i + 1]),
+                                    "simulation_mode": reg.get("simulation_mode"),
+                                    "float32": True,
+                                })
+                        else:
+                            for i, v in enumerate(raw):
+                                values.append({
+                                    "slave_id": slave_id,
+                                    "register_type": reg_type,
+                                    "address": addr_start + i,
+                                    "value": bool(v) if isinstance(v, bool) else int(v),
+                                    "simulation_mode": reg.get("simulation_mode"),
+                                })
+                    else:
+                        if use_float32:
+                            raw = modbus_server.read_registers(slave_id, func_code, addr_start, 2)
+                            fval = _decode_float(raw[0], raw[1]) if len(raw) >= 2 else None
                             values.append({
                                 "slave_id": slave_id,
                                 "register_type": reg_type,
-                                "address": addr_start + i,
-                                "value": bool(v) if isinstance(v, bool) else int(v),
+                                "address": addr_start,
+                                "value": fval,
+                                "simulation_mode": reg.get("simulation_mode"),
+                                "float32": True,
+                            })
+                        else:
+                            raw = modbus_server.read_registers(slave_id, func_code, addr_start, 1)
+                            v = raw[0] if raw else None
+                            values.append({
+                                "slave_id": slave_id,
+                                "register_type": reg_type,
+                                "address": addr_start,
+                                "value": (
+                                    bool(v) if isinstance(v, bool)
+                                    else (int(v) if v is not None else None)
+                                ),
                                 "simulation_mode": reg.get("simulation_mode"),
                             })
-                    else:
-                        raw = modbus_server.read_registers(slave_id, func_code, addr_start, 1)
-                        v = raw[0] if raw else None
-                        values.append({
-                            "slave_id": slave_id,
-                            "register_type": reg_type,
-                            "address": addr_start,
-                            "value": (
-                                bool(v) if isinstance(v, bool)
-                                else (int(v) if v is not None else None)
-                            ),
-                            "simulation_mode": reg.get("simulation_mode"),
-                        })
                 except Exception as e:
                     values.append({
                         "slave_id": slave_id,
@@ -821,6 +866,41 @@ class WebServer(threading.Thread):
                 msg = f"Server {server_id} updated and Modbus servers restarted."
             else:
                 msg = f"Server {server_id} updated. Restart application to apply."
+            return {"success": True, "message": msg}
+        except Exception as e:
+            return {"success": False, "message": str(e)}
+
+    def update_slave_handler(self, server_id: int, slave_id: int, slave: SlaveItem):
+        """Update an existing slave's register sizes."""
+        try:
+            data = slave.model_dump()
+            data["server_id"] = server_id
+            data["slave_id"] = slave_id
+            result = self.database.upsert_slave(data)
+            if not result["success"]:
+                return {"success": False, "message": result["errors"]}
+            if self.server_manager:
+                self.server_manager.restart_modbus_servers()
+                msg = f"Slave {server_id}/{slave_id} updated and Modbus servers restarted."
+            else:
+                msg = f"Slave {server_id}/{slave_id} updated. Restart application to apply."
+            return {"success": True, "message": msg}
+        except Exception as e:
+            return {"success": False, "message": str(e)}
+
+    def delete_slave_handler(self, server_id: int, slave_id: int):
+        """Delete a slave from a server."""
+        try:
+            result = self.database.delete_slave(server_id, slave_id)
+            if not result["success"]:
+                return {"success": False, "message": result["errors"]}
+            if not result["deleted"]:
+                return {"success": False, "message": f"Slave {server_id}/{slave_id} not found."}
+            if self.server_manager:
+                self.server_manager.restart_modbus_servers()
+                msg = f"Slave {server_id}/{slave_id} deleted and Modbus servers restarted."
+            else:
+                msg = f"Slave {server_id}/{slave_id} deleted. Restart application to apply."
             return {"success": True, "message": msg}
         except Exception as e:
             return {"success": False, "message": str(e)}
