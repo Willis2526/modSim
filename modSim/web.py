@@ -59,6 +59,7 @@ class ServerConfig(BaseModel):
     port: int = 502
     instances: int = 1
     slaves: int = 1
+    zero_based: bool = True  # applied to every server instance created here
     identity: ModbusIdentity = ModbusIdentity()
     register_sizes: RegisterSizes = RegisterSizes()
 
@@ -69,6 +70,7 @@ class ServerConfig(BaseModel):
                 "port": 502,
                 "instances": 2,
                 "slaves": 3,
+                "zero_based": True,
                 "identity": {
                     "VendorName": "MySimulator",
                     "ProductCode": "SIM1",
@@ -173,6 +175,7 @@ class ServerItem(BaseModel):
     vendor_name: str = "ModbusSimulator"
     product_code: str = "MSIM"
     version: str = "1.0"
+    zero_based: bool = True  # False → rule addresses are 1-based (address N ⇒ register N-1)
 
     class Config:
         json_schema_extra = {
@@ -182,7 +185,8 @@ class ServerItem(BaseModel):
                 "port": 502,
                 "vendor_name": "ModbusSimulator",
                 "product_code": "MSIM",
-                "version": "1.0"
+                "version": "1.0",
+                "zero_based": True
             }
         }
 
@@ -623,6 +627,9 @@ class WebServer(threading.Thread):
                 func_code = reg_type_codes[reg_type]
                 addr_start = int(reg.get("address", 0))
                 addr_end = reg.get("address_end")
+                # Read from the 0-based datastore; report the user-facing address.
+                addr_offset = 0 if getattr(modbus_server, "zero_based", True) else 1
+                read_start = addr_start - addr_offset
                 sim_config = reg.get("simulation_config") or {}
                 use_float32 = bool(sim_config.get("float32")) and reg_type in ("hr", "ir")
 
@@ -632,7 +639,7 @@ class WebServer(threading.Thread):
                 try:
                     if addr_end is not None:
                         phys_count = min(int(addr_end) - addr_start + 1, 50)
-                        raw = modbus_server.read_registers(slave_id, func_code, addr_start, phys_count)
+                        raw = modbus_server.read_registers(slave_id, func_code, read_start, phys_count)
                         if use_float32:
                             for i in range(0, len(raw) - 1, 2):
                                 values.append({
@@ -654,7 +661,7 @@ class WebServer(threading.Thread):
                                 })
                     else:
                         if use_float32:
-                            raw = modbus_server.read_registers(slave_id, func_code, addr_start, 2)
+                            raw = modbus_server.read_registers(slave_id, func_code, read_start, 2)
                             fval = _decode_float(raw[0], raw[1]) if len(raw) >= 2 else None
                             values.append({
                                 "slave_id": slave_id,
@@ -665,7 +672,7 @@ class WebServer(threading.Thread):
                                 "float32": True,
                             })
                         else:
-                            raw = modbus_server.read_registers(slave_id, func_code, addr_start, 1)
+                            raw = modbus_server.read_registers(slave_id, func_code, read_start, 1)
                             v = raw[0] if raw else None
                             values.append({
                                 "slave_id": slave_id,
@@ -726,7 +733,8 @@ class WebServer(threading.Thread):
                         "port": config.port + server_id,
                         "vendor_name": config.identity.VendorName,
                         "product_code": config.identity.ProductCode,
-                        "version": config.identity.MajorMinorRevision
+                        "version": config.identity.MajorMinorRevision,
+                        "zero_based": config.zero_based
                     })
 
                     for slave_id in range(config.slaves):

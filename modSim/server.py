@@ -62,7 +62,8 @@ class Server:
                     "port": base_port + server_id,
                     "vendor_name": identity.get("VendorName", "ModbusSimulator"),
                     "product_code": identity.get("ProductCode", "MSIM"),
-                    "version": identity.get("MajorMinorRevision", "1.0")
+                    "version": identity.get("MajorMinorRevision", "1.0"),
+                    "zero_based": self.settings["modbus"].get("zero_based", True)
                 })
 
                 # Create slaves for this server
@@ -147,7 +148,8 @@ class Server:
                 identity,
                 len(slaves),  # number of slaves
                 100,  # deprecated registers parameter (kept for compatibility)
-                register_sizes
+                register_sizes,
+                zero_based=server_config.get("zero_based", True),
             )
             self.modbus_servers[server_id].start()
             logger.info(f"Started Modbus server {server_id} on {server_config['ip']}:{server_config['port']} with {len(slaves)} slave(s)")
@@ -156,9 +158,14 @@ class Server:
         """Stop and restart all Modbus servers with current database configuration"""
         logger.info("Restarting Modbus servers...")
 
-        # Stop existing servers
+        # Stop existing servers and wait for their threads to fully exit so
+        # the listening sockets are released before we rebind the same ports.
         for server in self.modbus_servers.values():
             server.stop()
+            server.join(timeout=10)
+            if server.is_alive():
+                logger.warning("Modbus server %s thread did not exit within timeout",
+                               server.serverId)
 
         self.modbus_servers.clear()
 

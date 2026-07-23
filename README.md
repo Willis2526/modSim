@@ -111,6 +111,26 @@ After the first run, use the web UI or API to change configuration — edits to 
 
 ---
 
+## Addressing
+
+Each server has a **zero_based** flag (default `true`) that controls how the
+`address`/`address_end` in register rules map to physical registers. It can be
+set per server from the **Servers** page in the web UI, via the server APIs, or
+seeded from `settings.json` (`modbus.zero_based`).
+
+| Mode | `zero_based` | Rule `address` N maps to | Client reads it at (wire) |
+|------|--------------|--------------------------|---------------------------|
+| 0-based (default) | `true`  | register `N`   | `N`   |
+| 1-based           | `false` | register `N-1` | `N-1` |
+
+The Modbus wire protocol is **always 0-based** — the flag only shifts how rule
+addresses (and the addresses shown in the live view) are interpreted, so you can
+configure rules using 1-based reference numbers from SCADA/OPC documentation.
+The `address` variable available to `equation` mode always reflects the
+user-facing address you entered.
+
+---
+
 ## Running
 
 ```bash
@@ -162,6 +182,7 @@ Replaces the **entire** server/slave topology. Accepts two formats.
   "port": 502,
   "instances": 2,
   "slaves": 3,
+  "zero_based": true,
   "identity": {
     "VendorName": "MySimulator",
     "ProductCode": "SIM1",
@@ -172,6 +193,8 @@ Replaces the **entire** server/slave topology. Accepts two formats.
 ```
 
 Creates server 0 on port 502 and server 1 on port 503, each with slaves 0–2.
+`zero_based` (default `true`) is applied to every instance created here — set it
+to `false` to enter rule addresses in 1-based numbering (see [Addressing](#addressing)).
 
 **Detailed** — full per-server and per-slave control:
 
@@ -179,7 +202,8 @@ Creates server 0 on port 502 and server 1 on port 503, each with slaves 0–2.
 {
   "servers": [
     { "server_id": 0, "ip": "0.0.0.0", "port": 502,
-      "vendor_name": "Acme", "product_code": "SIM1", "version": "1.0" }
+      "vendor_name": "Acme", "product_code": "SIM1", "version": "1.0",
+      "zero_based": true }
   ],
   "slaves": [
     { "server_id": 0, "slave_id": 0, "co_size": 100, "di_size": 100, "hr_size": 100, "ir_size": 1200 },
@@ -209,7 +233,8 @@ Inserts or replaces one server without touching others. Triggers restart.
   "port": 503,
   "vendor_name": "Acme",
   "product_code": "SIM2",
-  "version": "2.0"
+  "version": "2.0",
+  "zero_based": true
 }
 ```
 

@@ -284,6 +284,35 @@ class TestWebServerEndpoints:
         assert data["success"] is True
         assert "server" in data["message"].lower()
 
+    def test_configure_server_defaults_to_zero_based(self, client):
+        """A simplified config without zero_based persists 0-based servers."""
+        client.post("/configure-server", json={"ip": "0.0.0.0", "port": 502,
+                                                "instances": 1, "slaves": 1})
+        servers = client.get("/get-server-config").json()["servers"]
+        assert all(s["zero_based"] is True for s in servers)
+
+    def test_configure_server_one_based(self, client):
+        """zero_based=False in a simplified config is applied to every instance."""
+        response = client.post("/configure-server", json={
+            "ip": "0.0.0.0", "port": 502, "instances": 2, "slaves": 1,
+            "zero_based": False,
+        })
+        assert response.status_code == 200
+        servers = client.get("/get-server-config").json()["servers"]
+        assert len(servers) == 2
+        assert all(s["zero_based"] is False for s in servers)
+
+    def test_add_server_one_based(self, client):
+        """/servers/add persists the zero_based flag for a single server."""
+        response = client.post("/servers/add", json={
+            "server_id": 3, "ip": "0.0.0.0", "port": 505, "zero_based": False,
+        })
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        servers = client.get("/get-server-config").json()["servers"]
+        srv3 = [s for s in servers if s["server_id"] == 3][0]
+        assert srv3["zero_based"] is False
+
     def test_configure_server_multiple_instances(self, client):
         """Test configure-server with multiple server instances"""
         server_config = {

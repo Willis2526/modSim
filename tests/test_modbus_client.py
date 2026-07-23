@@ -379,3 +379,75 @@ class TestFloatSimulation:
         assert not raw.isError()
         assert raw.registers[0] == 42  # fractional part truncated
 
+
+# One-based addressing (server-level zero_based=False)
+
+_ONEBASED_PORT = 15031
+
+
+@pytest.fixture(scope="module")
+def onebased_server():
+    """A server whose rule addresses are 1-based (address N ⇒ register N-1)."""
+    srv = Server(
+        server_id=0,
+        address=_HOST,
+        port=_ONEBASED_PORT,
+        number_of_slaves=1,
+        register_sizes={"co": 100, "di": 100, "hr": 100, "ir": 100},
+        zero_based=False,
+    )
+    srv.start()
+    assert _wait_for_server(_HOST, _ONEBASED_PORT), "one-based server did not start"
+    yield srv
+
+
+@pytest.fixture()
+def onebased_client(onebased_server):
+    c = ModbusTcpClient(_HOST, port=_ONEBASED_PORT, timeout=3)
+    assert c.connect(), "Could not connect to one-based server"
+    yield c
+    c.close()
+
+
+class TestOneBasedAddressing:
+    def test_single_address_shifts_down_one(self, onebased_server, onebased_client):
+        """Rule at 1-based address 1 lands on 0-based wire register 0."""
+        regs = [{
+            "server_id": 0, "slave_id": 0, "register_type": "hr",
+            "address": 1, "address_end": None,
+            "simulate": True, "simulation_mode": "static",
+            "simulation_config": {"value": 4242},
+        }]
+        onebased_server.simulate(regs)
+        at0 = onebased_client.read_holding_registers(0, count=1, device_id=0)
+        assert not at0.isError()
+        assert at0.registers[0] == 4242
+
+    def test_range_maps_down_one(self, onebased_server, onebased_client):
+        """1-based range 10..12 fills 0-based wire registers 9..11."""
+        regs = [{
+            "server_id": 0, "slave_id": 0, "register_type": "hr",
+            "address": 10, "address_end": 12,
+            "simulate": True, "simulation_mode": "static",
+            "simulation_config": {"value": 55},
+        }]
+        onebased_server.simulate(regs)
+        wire = onebased_client.read_holding_registers(8, count=5, device_id=0)
+        assert not wire.isError()
+        # wire[0]=reg8 untouched, wire[1..3]=reg9..11 set, wire[4]=reg12 untouched
+        assert wire.registers == [0, 55, 55, 55, 0]
+
+    def test_equation_address_var_is_user_facing(self, onebased_server, onebased_client):
+        """The equation `address` var uses the user-facing (1-based) address."""
+        regs = [{
+            "server_id": 0, "slave_id": 0, "register_type": "hr",
+            "address": 20, "address_end": 22,
+            "simulate": True, "simulation_mode": "equation",
+            "simulation_config": {"equation": "address"},
+        }]
+        onebased_server.simulate(regs)
+        wire = onebased_client.read_holding_registers(19, count=3, device_id=0)
+        assert not wire.isError()
+        # register 19..21 hold the user-facing addresses 20,21,22
+        assert wire.registers == [20, 21, 22]
+

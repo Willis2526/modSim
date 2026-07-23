@@ -119,6 +119,13 @@
             <label class="form-label">Version</label>
             <input id="asVer" class="form-control form-control-sm" value="1.0" />
           </div>
+          <div class="col-6 col-md-3">
+            <label class="form-label" title="1-based treats rule address N as register N-1 on the (always 0-based) Modbus wire.">Addressing <i class="bi bi-info-circle" style="font-size:.72rem;color:#6e7a84"></i></label>
+            <select id="asBase" class="form-select form-select-sm">
+              <option value="true">0-based</option>
+              <option value="false">1-based</option>
+            </select>
+          </div>
         </div>
         <hr class="my-2" style="border-color:#21262d" />
         <small class="text-muted">Quick-add slaves for this server:</small>
@@ -171,6 +178,12 @@
             <div class="col-4"><label class="form-label">Base Port</label><input id="qPort" type="number" class="form-control form-control-sm" value="502" /></div>
             <div class="col-6"><label class="form-label">Instances</label><input id="qInst" type="number" class="form-control form-control-sm" value="1" /></div>
             <div class="col-6"><label class="form-label">Slaves / Instance</label><input id="qSlaves" type="number" class="form-control form-control-sm" value="1" /></div>
+            <div class="col-6"><label class="form-label">Addressing</label>
+              <select id="qBase" class="form-select form-select-sm">
+                <option value="true">0-based</option>
+                <option value="false">1-based</option>
+              </select>
+            </div>
             <div class="col-6"><label class="form-label">CO</label><input id="qCo" type="number" class="form-control form-control-sm" value="100" /></div>
             <div class="col-6"><label class="form-label">DI</label><input id="qDi" type="number" class="form-control form-control-sm" value="100" /></div>
             <div class="col-6"><label class="form-label">HR</label><input id="qHr" type="number" class="form-control form-control-sm" value="100" /></div>
@@ -405,7 +418,9 @@
           </table>
           <h6 class="fw-semibold mt-3 mb-2">Address Notes</h6>
           <ul class="mb-0" style="font-size:.78rem;color:#8b949e">
-            <li>Addresses are <strong style="color:#c9d1d9">0-based</strong> integers.</li>
+            <li>Each server has an <strong style="color:#c9d1d9">Addressing</strong> mode (Servers page).</li>
+            <li><strong style="color:#c9d1d9">0-based</strong> (default): rule address <code>N</code> is register <code>N</code>.</li>
+            <li><strong style="color:#c9d1d9">1-based</strong>: rule address <code>N</code> is register <code>N-1</code>; the Modbus wire stays 0-based, so a client reads it at <code>N-1</code>.</li>
             <li>Ignition OPC paths like <code>IR1136</code> map to 0-based address <strong style="color:#c9d1d9">1135</strong>.</li>
             <li>Use <code>address_end</code> to configure a contiguous range in one rule.</li>
             <li>Set <code>ir_size</code> ≥ highest address + 1 when configuring slaves.</li>
@@ -589,6 +604,13 @@
           <div class="col-6">
             <label class="form-label">Version</label>
             <input id="esVer" class="form-control form-control-sm" />
+          </div>
+          <div class="col-6">
+            <label class="form-label" title="1-based treats rule address N as register N-1 on the (always 0-based) Modbus wire.">Addressing <i class="bi bi-info-circle" style="font-size:.72rem;color:#6e7a84"></i></label>
+            <select id="esBase" class="form-select form-select-sm">
+              <option value="true">0-based</option>
+              <option value="false">1-based</option>
+            </select>
           </div>
         </div>
       </div>

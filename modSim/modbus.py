@@ -1,11 +1,12 @@
 """Handles Modbus objects"""
+import asyncio
 import logging
 import struct
 import threading
 
 from pymodbus import ModbusDeviceIdentification
 from pymodbus.datastore import ModbusServerContext
-from pymodbus.server import StartTcpServer
+from pymodbus.server import ModbusTcpServer
 from pymodbus.simulator.simdata import SimData, DataType
 from pymodbus.simulator.simdevice import SimDevice
 from pymodbus.simulator.simcore import SimCore
@@ -117,10 +118,16 @@ class Server(threading.Thread):
     """Modbus Server"""
 
     def __init__(self, server_id, address="0.0.0.0", port=502, identity={},
-                 number_of_slaves=1, number_of_registers=100, register_sizes=None):
+                 number_of_slaves=1, number_of_registers=100, register_sizes=None,
+                 zero_based=True):
         super().__init__(name="mod_server", daemon=True)
         self._stop_event = threading.Event()
+        self._loop = None            # event loop owned by this thread
+        self._async_server = None    # pymodbus ModbusTcpServer instance
         self.serverId = server_id
+        # When False, register-rule addresses are treated as 1-based: address N
+        # maps to 0-based datastore offset N-1 (the Modbus wire is always 0-based).
+        self.zero_based = zero_based
         self.address = address
         self.port = port
         self.identity = identity
@@ -144,6 +151,7 @@ class Server(threading.Thread):
             "identity": self.identity,
             "number_of_registers": self.numberOfRegisters,
             "register_sizes": self.registerSizes,
+            "zero_based": self.zero_based,
             "running": self.running,
         }
 
@@ -195,26 +203,54 @@ class Server(threading.Thread):
         ident.ModelName = self.identity.get("model_name", "Pymodbus Server")
         ident.MajorMinorRevision = self.identity.get("revision", "1.0")
 
-        logger.info("Modbus server started on %s:%d", self.address, self.port)
-        self.running = True
+        # Own the event loop for this thread so stop() can shut the server
+        # (and free the listening socket) down cleanly from another thread.
+        self._loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._loop)
+        try:
+            self._loop.run_until_complete(self._serve(ident))
+        except Exception as e:
+            logger.error("Modbus server on %s:%d stopped with error: %s",
+                         self.address, self.port, e)
+        finally:
+            self.running = False
+            self._async_server = None
+            self._loop.close()
+            self._loop = None
+            logger.info("Modbus server on %s:%d exited", self.address, self.port)
 
-        StartTcpServer(
-            context=self.context,
+    async def _serve(self, ident):
+        self._async_server = ModbusTcpServer(
+            self.context,
             identity=ident,
             address=(self.address, self.port),
         )
+        logger.info("Modbus server started on %s:%d", self.address, self.port)
+        self.running = True
+        await self._async_server.serve_forever()
 
     def stop(self):
+        """Shut the TCP server down and release the listening socket.
+
+        Runs the async shutdown on the server's own loop from the calling
+        thread and waits for it, so the port is free before any replacement
+        server tries to bind it.
+        """
         self._stop_event.set()
+        srv = self._async_server
+        loop = self._loop
+        if srv is not None and loop is not None and loop.is_running():
+            try:
+                fut = asyncio.run_coroutine_threadsafe(srv.shutdown(), loop)
+                fut.result(timeout=5)
+            except Exception as e:
+                logger.warning("Error shutting down modbus server on %s:%d: %s",
+                               self.address, self.port, e)
         self.running = False
-        logger.info("Modbus server stopped")
+        logger.info("Modbus server on %s:%d stop requested", self.address, self.port)
 
     def stopped(self):
         return self._stop_event.is_set()
-
-    def restart(self):
-        self.stop()
-        self.run()
 
     def is_running(self):
         return self.running
@@ -277,8 +313,12 @@ class Server(threading.Thread):
                 continue
 
             reg_type_code = register_type_map[reg_type_key]
+            # For 1-based servers, shift the datastore write target down by one;
+            # generation (and equation `address`) keeps the user-facing address.
+            addr_offset = 0 if self.zero_based else 1
             addr_start = int(reg.get("address", 0))
             addr_end = reg.get("address_end")
+            write_start = addr_start - addr_offset
             max_size = (register_size_override if register_size_override is not None
                         else self.registerSizes.get(reg_type_key, self.numberOfRegisters))
 
@@ -286,27 +326,30 @@ class Server(threading.Thread):
 
             if addr_end is not None:
                 addr_end = int(addr_end)
-                if 0 <= addr_start < max_size and 0 <= addr_end < max_size and addr_start <= addr_end:
+                write_end = addr_end - addr_offset
+                if 0 <= write_start < max_size and 0 <= write_end < max_size and write_start <= write_end:
                     if use_float32 and is_numeric:
                         # addr_start..addr_end are physical registers; each float32 = 2 registers
-                        float_count = (addr_end - addr_start + 1) // 2
+                        float_count = (write_end - write_start + 1) // 2
                         floats = _gen_block(reg_type_key, float_count, addr_start)
-                        self.write_float_registers(slave_id, addr_start, floats, fc=reg_type_code)
+                        self.write_float_registers(slave_id, write_start, floats, fc=reg_type_code)
                     else:
-                        values = _gen_block(reg_type_key, addr_end - addr_start + 1, addr_start)
-                        _ctx_write(runtime, reg_type_code, addr_start, values)
+                        values = _gen_block(reg_type_key, write_end - write_start + 1, addr_start)
+                        _ctx_write(runtime, reg_type_code, write_start, values)
                 else:
                     logger.warning(
-                        "Address range %s..%s out of range 0..%s for slave %s (%s).",
-                        addr_start, addr_end, max_size - 1, slave_id, reg_type_key,
+                        "Address range %s..%s out of range for slave %s (%s), %s-based.",
+                        addr_start, addr_end, slave_id, reg_type_key,
+                        "0" if self.zero_based else "1",
                     )
-            elif 0 <= addr_start < max_size:
+            elif 0 <= write_start < max_size:
                 if use_float32 and is_numeric:
-                    self.write_float_registers(slave_id, addr_start, [_gen_value(reg_type_key, addr_start)], fc=reg_type_code)
+                    self.write_float_registers(slave_id, write_start, [_gen_value(reg_type_key, addr_start)], fc=reg_type_code)
                 else:
-                    _ctx_write(runtime, reg_type_code, addr_start, [_gen_value(reg_type_key, addr_start)])
+                    _ctx_write(runtime, reg_type_code, write_start, [_gen_value(reg_type_key, addr_start)])
             else:
                 logger.warning(
-                    "Address %s out of range 0..%s for slave %s (%s).",
-                    addr_start, max_size - 1, slave_id, reg_type_key,
+                    "Address %s out of range for slave %s (%s), %s-based.",
+                    addr_start, slave_id, reg_type_key,
+                    "0" if self.zero_based else "1",
                 )

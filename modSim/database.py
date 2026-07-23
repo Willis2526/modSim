@@ -34,10 +34,19 @@ class Database:
                         port INTEGER NOT NULL,
                         vendor_name TEXT DEFAULT 'ModbusSimulator',
                         product_code TEXT DEFAULT 'MSIM',
-                        version TEXT DEFAULT '1.0'
+                        version TEXT DEFAULT '1.0',
+                        zero_based INTEGER NOT NULL DEFAULT 1
                     )
                     """
                 )
+
+                # Migrate older databases that predate the zero_based column
+                cursor.execute("PRAGMA table_info(servers)")
+                server_columns = {row[1] for row in cursor.fetchall()}
+                if "zero_based" not in server_columns:
+                    cursor.execute(
+                        "ALTER TABLE servers ADD COLUMN zero_based INTEGER NOT NULL DEFAULT 1"
+                    )
 
                 # Create slaves table
                 cursor.execute(
@@ -223,8 +232,8 @@ class Database:
                 cursor = conn.cursor()
                 cursor.execute(
                     """INSERT OR REPLACE INTO servers
-                       (server_id, ip, port, vendor_name, product_code, version)
-                       VALUES (?, ?, ?, ?, ?, ?)""",
+                       (server_id, ip, port, vendor_name, product_code, version, zero_based)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
                     (
                         server_id,
                         server.get("ip", "0.0.0.0"),
@@ -232,6 +241,7 @@ class Database:
                         server.get("vendor_name", "ModbusSimulator"),
                         server.get("product_code", "MSIM"),
                         server.get("version", "1.0"),
+                        int(server.get("zero_based", True)),
                     )
                 )
                 conn.commit()
@@ -364,7 +374,7 @@ class Database:
             conn = self._get_connection()
             try:
                 cursor = conn.cursor()
-                cursor.execute("SELECT server_id, ip, port, vendor_name, product_code, version FROM servers ORDER BY server_id")
+                cursor.execute("SELECT server_id, ip, port, vendor_name, product_code, version, zero_based FROM servers ORDER BY server_id")
                 results = cursor.fetchall()
                 return [
                     {
@@ -373,7 +383,8 @@ class Database:
                         "port": row[2],
                         "vendor_name": row[3],
                         "product_code": row[4],
-                        "version": row[5]
+                        "version": row[5],
+                        "zero_based": bool(row[6])
                     }
                     for row in results
                 ]
@@ -462,13 +473,14 @@ class Database:
                     vendor_name = server.get("vendor_name", "ModbusSimulator")
                     product_code = server.get("product_code", "MSIM")
                     version = server.get("version", "1.0")
+                    zero_based = int(server.get("zero_based", True))
 
                     cursor.execute(
                         """
-                        INSERT INTO servers (server_id, ip, port, vendor_name, product_code, version)
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        INSERT INTO servers (server_id, ip, port, vendor_name, product_code, version, zero_based)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                         """,
-                        (server_id, ip, port, vendor_name, product_code, version)
+                        (server_id, ip, port, vendor_name, product_code, version, zero_based)
                     )
 
                 # Insert slaves

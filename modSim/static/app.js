@@ -75,6 +75,7 @@ async function loadServers() {
                    '<div class="server-card-title">Server ' + s.server_id + '</div>' +
                    '<div class="server-card-sub">' + s.ip + ':' + s.port + '</div>' +
                    '<div class="server-card-sub">' + s.vendor_name + ' &mdash; ' + s.version + '</div>' +
+                   '<div class="server-card-sub"><span class="badge ' + (s.zero_based === false ? 'bg-warning text-dark' : 'bg-secondary') + '" style="font-size:.6rem">' + (s.zero_based === false ? '1-based' : '0-based') + '</span></div>' +
                    '</div></div>';
           }).join('')
         : '<div class="col-12"><p class="text-muted">No servers configured.</p></div>';
@@ -100,7 +101,8 @@ async function addServer() {
         port:         int('asPort'),
         vendor_name:  val('asVendor') || 'ModbusSimulator',
         product_code: val('asPcode') || 'MSIM',
-        version:      val('asVer') || '1.0'
+        version:      val('asVer') || '1.0',
+        zero_based:   val('asBase') !== 'false'
     };
     var res = await api('/servers/add', 'POST', body);
     if (!res.success) { toast('Error: ' + res.message, 'danger'); return; }
@@ -147,6 +149,7 @@ async function quickApply() {
         port:      int('qPort'),
         instances: int('qInst'),
         slaves:    int('qSlaves'),
+        zero_based: val('qBase') !== 'false',
         identity:  { VendorName: 'ModbusSimulator', ProductCode: 'MSIM', MajorMinorRevision: '1.0' },
         register_sizes: { co: int('qCo'), di: int('qDi'), hr: int('qHr'), ir: int('qIr') }
     };
@@ -353,6 +356,7 @@ function openEditServer(s) {
     document.getElementById('esVendor').value    = s.vendor_name;
     document.getElementById('esPcode').value     = s.product_code;
     document.getElementById('esVer').value       = s.version;
+    document.getElementById('esBase').value      = (s.zero_based === false ? 'false' : 'true');
     if (!_editServerModal) _editServerModal = new bootstrap.Modal(document.getElementById('editServerModal'));
     _editServerModal.show();
 }
@@ -365,7 +369,8 @@ async function saveEditServer() {
         port:         parseInt(document.getElementById('esPort').value, 10),
         vendor_name:  document.getElementById('esVendor').value,
         product_code: document.getElementById('esPcode').value,
-        version:      document.getElementById('esVer').value
+        version:      document.getElementById('esVer').value,
+        zero_based:   document.getElementById('esBase').value !== 'false'
     };
     var res = await api('/servers/' + serverId, 'PUT', body);
     toast(res.message || (res.success ? 'Saved' : 'Error'), res.success ? 'success' : 'danger');

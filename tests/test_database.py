@@ -389,3 +389,44 @@ class TestDatabase:
         assert 0 in server_ids
         assert 1 in server_ids
         assert None in server_ids
+
+
+class TestServerZeroBased:
+    """Persistence of the per-server zero_based addressing flag."""
+
+    def test_default_is_zero_based(self, temp_db):
+        temp_db.upsert_server({"server_id": 0, "port": 502})
+        row = temp_db.get_servers()[0]
+        assert row["zero_based"] is True
+
+    def test_upsert_one_based(self, temp_db):
+        temp_db.upsert_server({"server_id": 0, "port": 502, "zero_based": False})
+        row = temp_db.get_servers()[0]
+        assert row["zero_based"] is False
+
+    def test_save_server_config_round_trip(self, temp_db):
+        temp_db.save_server_config(
+            [{"server_id": 0, "port": 502, "zero_based": False},
+             {"server_id": 1, "port": 503, "zero_based": True}],
+            [{"server_id": 0, "slave_id": 0}, {"server_id": 1, "slave_id": 0}],
+        )
+        by_id = {s["server_id"]: s for s in temp_db.get_servers()}
+        assert by_id[0]["zero_based"] is False
+        assert by_id[1]["zero_based"] is True
+
+    def test_migration_adds_column_to_legacy_db(self, temp_db):
+        """A pre-existing servers table without zero_based is migrated in place."""
+        import sqlite3
+        # Drop and recreate the servers table in the legacy (pre-flag) shape
+        with sqlite3.connect(temp_db.db_path) as conn:
+            conn.execute("DROP TABLE servers")
+            conn.execute(
+                "CREATE TABLE servers (server_id INTEGER PRIMARY KEY, ip TEXT, "
+                "port INTEGER, vendor_name TEXT, product_code TEXT, version TEXT)"
+            )
+            conn.execute("INSERT INTO servers VALUES (0,'0.0.0.0',502,'V','P','1.0')")
+            conn.commit()
+        # Re-open: initialization should ALTER TABLE ADD COLUMN zero_based
+        migrated = Database(temp_db.db_path)
+        row = migrated.get_servers()[0]
+        assert row["zero_based"] is True
