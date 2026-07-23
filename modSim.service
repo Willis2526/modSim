@@ -9,8 +9,8 @@ Restart=always
 RestartSec=15
 User=root
 SyslogIdentifier=modSim
-WorkingDirectory=/opt/vertech/modSim/
-ExecStart=/opt/vertech/modSim/env/bin/python -m modSim
+WorkingDirectory=/srv/modSim/
+ExecStart=/srv/modSim/env/bin/python -m modSim
 
 [Install]
 WantedBy=multi-user.target
