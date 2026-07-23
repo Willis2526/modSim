@@ -9,6 +9,8 @@ __pycache__/
 # C extensions
 *.so
 
+# Data
+data/
 settings.json
 settings.db
 
