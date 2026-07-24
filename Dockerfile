@@ -18,8 +18,12 @@ COPY . /app
 # Create data directory for persistent storage
 RUN mkdir -p /app/data
 
-# Expose Modbus TCP (502) and API (8000)
-EXPOSE 502 8000
+# Expose the web API (8000) and a range of Modbus TCP ports for server 0 plus
+# any additional servers added later through the UI/API (each new server needs
+# a port within this range published in docker-compose.yml to be reachable
+# from outside the container — see MODBUS_PORT_RANGE there).
+EXPOSE 8000
+EXPOSE 502-520
 
 # Default: run the module
 CMD ["python", "-m", "modSim"]

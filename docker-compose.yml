@@ -4,8 +4,15 @@ services:
     container_name: modsim
     restart: unless-stopped
     ports:
-      - "502:502/tcp"
-      - "8000:8000/tcp"
+      - "${WEB_PORT:-8000}:8000/tcp"
+      # Publishes a whole range so servers added later via the web UI/API are
+      # reachable without editing this file — as long as their port falls
+      # inside the range. To widen it, change MODBUS_PORT_RANGE in .env (or
+      # the environment) and recreate the container: `docker compose up -d`.
+      # A server whose port falls outside the published range still runs and
+      # is reachable from other containers on this compose network, but not
+      # from outside Docker.
+      - "${MODBUS_PORT_RANGE:-502-520}:${MODBUS_PORT_RANGE:-502-520}/tcp"
     volumes:
       # Mount only the data directory for persistent storage (settings.db, settings.json)
       - ./data:/app/data

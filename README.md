@@ -42,6 +42,25 @@ docker-compose down        # stop
 docker-compose logs -f     # stream logs
 ```
 
+**Additional servers.** New servers can be added at any time from the web UI
+or API (see [Servers](#servers)), each on its own port. Docker only forwards
+ports that are explicitly published, so `docker-compose.yml` publishes a
+range — `502-520` by default — covering server 0 plus headroom for more.
+A new server's port must fall inside this range to be reachable from outside
+the container.
+
+To widen the range, copy `.env.example` to `.env`, adjust `MODBUS_PORT_RANGE`
+(and `WEB_PORT` if needed), then re-create the container:
+
+```bash
+cp .env.example .env
+# edit .env, e.g. MODBUS_PORT_RANGE=502-550
+docker-compose up -d
+```
+
+A server outside the published range still runs and is reachable from other
+containers on the compose network, just not from outside Docker.
+
 ### Local — Windows
 
 ```powershell
