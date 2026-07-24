@@ -4,6 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>modSim</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
   <link rel="stylesheet" href="/static/style.css" />
@@ -96,81 +99,23 @@
 
   <!-- ── SERVERS ─────────────────────────────────────────────────────────── -->
   <div class="page d-none" id="pServer">
-    <div class="page-title">Servers</div>
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <span class="page-title mb-0">Servers</span>
+      <div class="toolbar">
+        <button class="btn btn-sm btn-outline-secondary" onclick="loadServers()"><i class="bi bi-arrow-clockwise me-1"></i>Refresh</button>
+        <button class="btn btn-sm btn-primary" onclick="openAddServer()"><i class="bi bi-plus-lg me-1"></i>Add Server</button>
+      </div>
+    </div>
 
     <!-- Server cards -->
     <div id="serverCardsWrap" class="row g-3 mb-4"></div>
 
-    <!-- Add Server -->
-    <div class="card mb-4">
-      <div class="card-header d-flex justify-content-between align-items-center">
-        Add / Update Server
-        <button class="btn btn-sm btn-primary" onclick="addServer()"><i class="bi bi-plus-lg me-1"></i>Save Server</button>
-      </div>
-      <div class="card-body">
-        <div class="row g-2">
-          <div class="col-4 col-md-2">
-            <label class="form-label">Server ID</label>
-            <input id="asId" type="number" class="form-control form-control-sm" value="0" min="0" />
-          </div>
-          <div class="col-8 col-md-4">
-            <label class="form-label">IP Address</label>
-            <input id="asIp" class="form-control form-control-sm" value="0.0.0.0" />
-          </div>
-          <div class="col-4 col-md-2">
-            <label class="form-label">Port</label>
-            <input id="asPort" type="number" class="form-control form-control-sm" value="502" />
-          </div>
-          <div class="col-8 col-md-4">
-            <label class="form-label">Vendor Name</label>
-            <input id="asVendor" class="form-control form-control-sm" value="ModbusSimulator" />
-          </div>
-          <div class="col-6 col-md-3">
-            <label class="form-label">Product Code</label>
-            <input id="asPcode" class="form-control form-control-sm" value="MSIM" />
-          </div>
-          <div class="col-6 col-md-3">
-            <label class="form-label">Version</label>
-            <input id="asVer" class="form-control form-control-sm" value="1.0" />
-          </div>
-          <div class="col-6 col-md-3">
-            <label class="form-label" title="1-based treats rule address N as register N-1 on the (always 0-based) Modbus wire.">Addressing <i class="bi bi-info-circle" style="font-size:.72rem;color:var(--text-faint)"></i></label>
-            <select id="asBase" class="form-select form-select-sm">
-              <option value="true">0-based</option>
-              <option value="false">1-based</option>
-            </select>
-          </div>
-        </div>
-        <hr class="my-2" />
-        <small class="text-muted">Quick-add slaves for this server:</small>
-        <div class="row g-2 mt-1">
-          <div class="col-4 col-md-2">
-            <label class="form-label">Num Slaves</label>
-            <input id="asSlaves" type="number" class="form-control form-control-sm" value="1" min="1" />
-          </div>
-          <div class="col-4 col-md-2">
-            <label class="form-label">CO size</label>
-            <input id="asCo" type="number" class="form-control form-control-sm" value="100" />
-          </div>
-          <div class="col-4 col-md-2">
-            <label class="form-label">DI size</label>
-            <input id="asDi" type="number" class="form-control form-control-sm" value="100" />
-          </div>
-          <div class="col-4 col-md-2">
-            <label class="form-label">HR size</label>
-            <input id="asHr" type="number" class="form-control form-control-sm" value="100" />
-          </div>
-          <div class="col-4 col-md-2">
-            <label class="form-label">IR size</label>
-            <input id="asIr" type="number" class="form-control form-control-sm" value="100" />
-          </div>
-        </div>
-      </div>
-    </div>
-
     <!-- Slaves table -->
     <div class="card mb-4">
-      <div class="card-header">Configured Slaves</div>
+      <div class="card-header d-flex justify-content-between align-items-center">
+        Configured Slaves
+        <button class="btn btn-sm btn-outline-secondary" onclick="openAddSlave()"><i class="bi bi-plus-lg me-1"></i>Add Slave</button>
+      </div>
       <div class="card-body p-0">
         <table class="table table-sm mb-0" id="tSlavesServer">
           <thead><tr><th>Srv</th><th>Slave</th><th>CO</th><th>DI</th><th>HR</th><th>IR</th><th></th></tr></thead>
@@ -224,82 +169,31 @@
       <div class="toolbar">
         <button class="btn btn-sm btn-outline-secondary" onclick="loadRegs()"><i class="bi bi-arrow-clockwise me-1"></i>Refresh</button>
         <button class="btn btn-sm btn-outline-secondary" onclick="exportConfig()"><i class="bi bi-download me-1"></i>Export</button>
+        <button class="btn btn-sm btn-primary" onclick="openAddRule()"><i class="bi bi-plus-lg me-1"></i>Add Rule</button>
       </div>
     </div>
 
     <!-- Rules table -->
     <div class="card mb-3">
+      <div class="filter-bar">
+        <select id="rfServer" class="form-select form-select-sm" style="width:auto" onchange="onRegsFilterChange()">
+          <option value="">All Servers</option>
+        </select>
+        <input id="rfSlave" type="number" class="form-control form-control-sm" placeholder="Slave" style="width:90px" oninput="onRegsFilterChange()" />
+        <select id="rfType" class="form-select form-select-sm" style="width:auto" onchange="onRegsFilterChange()">
+          <option value="">All Types</option>
+          <option value="co">co</option>
+          <option value="di">di</option>
+          <option value="hr">hr</option>
+          <option value="ir">ir</option>
+          <option value="all">all</option>
+        </select>
+        <input id="rfSearch" type="text" class="form-control form-control-sm" placeholder="Search id, address, mode, config…" style="flex:1;min-width:180px" oninput="onRegsFilterChange()" />
+        <button class="btn btn-sm btn-outline-secondary" onclick="clearRegsFilters()">Clear</button>
+        <span id="regsCaption" class="section-label ms-auto"></span>
+      </div>
       <div class="card-body p-0" id="regsWrap">
         <p class="text-muted p-3 mb-0">Click Refresh to load rules.</p>
-      </div>
-    </div>
-
-    <!-- Add Rule form -->
-    <div class="card mb-3">
-      <div class="card-header d-flex justify-content-between align-items-center">
-        Add Rule
-        <button class="btn btn-sm btn-primary" onclick="addRule()"><i class="bi bi-plus-lg me-1"></i>Add Rule</button>
-      </div>
-      <div class="card-body">
-        <div class="row g-2">
-          <div class="col-6 col-md-2">
-            <label class="form-label">Server ID</label>
-            <input id="arSrv" type="number" class="form-control form-control-sm" placeholder="0" />
-          </div>
-          <div class="col-6 col-md-2">
-            <label class="form-label">Slave ID <span class="text-danger">*</span></label>
-            <input id="arSlave" type="number" class="form-control form-control-sm" value="0" min="0" />
-          </div>
-          <div class="col-6 col-md-2">
-            <label class="form-label">Type <span class="text-danger">*</span></label>
-            <select id="arType" class="form-select form-select-sm">
-              <option value="ir">ir — Input Regs</option>
-              <option value="hr">hr — Holding Regs</option>
-              <option value="co">co — Coils</option>
-              <option value="di">di — Discrete In</option>
-              <option value="all">all — All Types</option>
-            </select>
-          </div>
-          <div class="col-6 col-md-2">
-            <label class="form-label">Address</label>
-            <input id="arAddr" type="number" class="form-control form-control-sm" value="0" min="0" />
-          </div>
-          <div class="col-6 col-md-2">
-            <label class="form-label">Address End</label>
-            <input id="arEnd" type="number" class="form-control form-control-sm" placeholder="single" />
-          </div>
-          <div class="col-6 col-md-2">
-            <label class="form-label">Reg Size</label>
-            <input id="arSize" type="number" class="form-control form-control-sm" placeholder="default" />
-          </div>
-          <div class="col-6 col-md-3">
-            <label class="form-label">Mode</label>
-            <select id="arMode" class="form-select form-select-sm" onchange="fillModeDefaults()">
-              <option value="static">static</option>
-              <option value="random">random</option>
-              <option value="sine">sine</option>
-              <option value="ramp">ramp</option>
-              <option value="square">square</option>
-              <option value="equation">equation</option>
-            </select>
-          </div>
-          <div class="col-6 col-md-2">
-            <label class="form-label d-flex align-items-center gap-2 pt-3 mt-1">
-              <input id="arSim" type="checkbox" class="form-check-input" checked />
-              Simulate
-            </label>
-          </div>
-          <div class="col-6 col-md-2">
-            <label class="form-label d-flex align-items-center gap-2 pt-3 mt-1" title="Encode each value as two consecutive 16-bit registers (HR/IR only). Address end must span an even number of registers.">
-              <input id="arFloat32" type="checkbox" class="form-check-input" onchange="fillModeDefaults()" />
-              Float32 <i class="bi bi-info-circle" style="font-size:.75rem;color:var(--text-faint)"></i>
-            </label>
-          </div>
-          <div class="col-12">
-            <label class="form-label">Simulation Config <small class="text-muted">(JSON)</small></label>
-            <textarea id="arConfig" class="form-control code" rows="2">{"value": 0}</textarea>
-          </div>
-        </div>
       </div>
     </div>
 
@@ -349,6 +243,59 @@
             <tr><td colspan="5" class="text-center py-4" style="color:var(--text-muted)">Click Start to begin polling</td></tr>
           </tbody>
         </table>
+      </div>
+    </div>
+
+    <!-- Direct register read/write -->
+    <div class="card mt-3">
+      <div class="card-header">Direct Read / Write</div>
+      <div class="card-body">
+        <p class="field-help mb-2">Reads or writes a specific address directly, independent of any simulation rule. Bypasses the rule engine — if the address is also covered by an active rule, the simulation loop will overwrite a write here on its next tick (~1s).</p>
+        <div class="row g-2 align-items-end">
+          <div class="col-6 col-md-2">
+            <label class="form-label">Server ID</label>
+            <input id="drwServer" type="number" class="form-control form-control-sm" value="0" min="0" />
+          </div>
+          <div class="col-6 col-md-2">
+            <label class="form-label">Slave ID</label>
+            <input id="drwSlave" type="number" class="form-control form-control-sm" value="0" min="0" />
+          </div>
+          <div class="col-6 col-md-2">
+            <label class="form-label">Type</label>
+            <select id="drwType" class="form-select form-select-sm" onchange="onDrwTypeChange()">
+              <option value="hr">hr — Holding Regs</option>
+              <option value="ir">ir — Input Regs</option>
+              <option value="co">co — Coils</option>
+              <option value="di">di — Discrete In</option>
+            </select>
+          </div>
+          <div class="col-6 col-md-2">
+            <label class="form-label">Address</label>
+            <input id="drwAddr" type="number" class="form-control form-control-sm" value="0" min="0" onchange="checkRuleOverlap()" />
+          </div>
+          <div class="col-6 col-md-2">
+            <label class="form-label">Count <small class="text-muted">(read)</small></label>
+            <input id="drwCount" type="number" class="form-control form-control-sm" value="1" min="1" max="125" />
+          </div>
+          <div class="col-6 col-md-2">
+            <label class="form-label d-flex align-items-center gap-2">
+              <input id="drwFloat32" type="checkbox" class="form-check-input" />
+              Float32
+            </label>
+          </div>
+        </div>
+        <div id="drwWarning" class="import-warning mt-2 d-none"></div>
+        <div class="row g-2 align-items-end mt-1">
+          <div class="col-12 col-md-6">
+            <label class="form-label">Value(s) <small class="text-muted">(write — comma-separated for a range)</small></label>
+            <input id="drwValues" type="text" class="form-control form-control-sm" placeholder="e.g. 42 or 1,2,3" />
+          </div>
+          <div class="col-auto d-flex gap-2">
+            <button class="btn btn-sm btn-outline-secondary" onclick="directRead()"><i class="bi bi-eye me-1"></i>Read</button>
+            <button class="btn btn-sm btn-primary" onclick="directWrite()"><i class="bi bi-pencil me-1"></i>Write</button>
+          </div>
+        </div>
+        <div id="drwResult" class="mt-2"></div>
       </div>
     </div>
   </div>
@@ -482,7 +429,7 @@
   <div class="modal-dialog modal-lg">
     <div class="modal-content">
       <div class="modal-header">
-        <h6 class="modal-title fw-semibold">Edit Rule <span id="erModalId" class="text-muted fw-normal"></span></h6>
+        <h6 class="modal-title fw-semibold"><span id="erModalVerb">Edit Rule</span> <span id="erModalId" class="text-muted fw-normal"></span></h6>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
@@ -520,7 +467,7 @@
           </div>
           <div class="col-6 col-md-3">
             <label class="form-label">Mode</label>
-            <select id="erMode" class="form-select form-select-sm">
+            <select id="erMode" class="form-select form-select-sm" onchange="fillModeDefaults()">
               <option value="static">static</option>
               <option value="random">random</option>
               <option value="sine">sine</option>
@@ -537,7 +484,7 @@
           </div>
           <div class="col-6 col-md-2">
             <label class="form-label d-flex align-items-center gap-2 pt-3 mt-1" title="Encode each value as two consecutive 16-bit registers (HR/IR only). Address end must span an even number of registers.">
-              <input id="erFloat32" type="checkbox" class="form-check-input" />
+              <input id="erFloat32" type="checkbox" class="form-check-input" onchange="fillModeDefaults()" />
               Float32 <i class="bi bi-info-circle" style="font-size:.75rem;color:var(--text-faint)"></i>
             </label>
           </div>
@@ -549,7 +496,7 @@
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
-        <button type="button" class="btn btn-primary btn-sm" onclick="saveEditRule()"><i class="bi bi-check-lg me-1"></i>Save Rule</button>
+        <button type="button" class="btn btn-primary btn-sm" onclick="saveEditRule()"><i class="bi bi-check-lg me-1"></i><span id="erSaveLabel">Save Rule</span></button>
       </div>
     </div>
   </div>
@@ -560,13 +507,21 @@
   <div class="modal-dialog">
     <div class="modal-content">
       <div class="modal-header">
-        <h6 class="modal-title fw-semibold">Edit Slave <span id="slModalId" class="text-muted fw-normal"></span></h6>
+        <h6 class="modal-title fw-semibold"><span id="slModalVerb">Edit Slave</span> <span id="slModalId" class="text-muted fw-normal"></span></h6>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
-        <input type="hidden" id="slServerId" />
-        <input type="hidden" id="slSlaveId" />
         <div class="row g-2">
+          <div class="col-6">
+            <label class="form-label">Server ID</label>
+            <input id="slServerId" type="number" class="form-control form-control-sm" min="0" />
+            <div class="field-help" id="slServerHelp"></div>
+          </div>
+          <div class="col-6">
+            <label class="form-label">Slave ID</label>
+            <input id="slSlaveId" type="number" class="form-control form-control-sm" min="0" />
+            <div class="field-help" id="slSlaveHelp"></div>
+          </div>
           <div class="col-6">
             <label class="form-label">CO size</label>
             <input id="slCo" type="number" class="form-control form-control-sm" min="0" />
@@ -587,7 +542,7 @@
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
-        <button type="button" class="btn btn-primary btn-sm" onclick="saveEditSlave()"><i class="bi bi-check-lg me-1"></i>Save Slave</button>
+        <button type="button" class="btn btn-primary btn-sm" onclick="saveEditSlave()"><i class="bi bi-check-lg me-1"></i><span id="slSaveLabel">Save Slave</span></button>
       </div>
     </div>
   </div>
@@ -598,13 +553,17 @@
   <div class="modal-dialog">
     <div class="modal-content">
       <div class="modal-header">
-        <h6 class="modal-title fw-semibold">Edit Server <span id="esModalId" class="text-muted fw-normal"></span></h6>
+        <h6 class="modal-title fw-semibold"><span id="esModalVerb">Edit Server</span> <span id="esModalId" class="text-muted fw-normal"></span></h6>
         <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
       </div>
       <div class="modal-body">
-        <input type="hidden" id="esServerId" />
         <div class="row g-2">
-          <div class="col-8">
+          <div class="col-4">
+            <label class="form-label">Server ID</label>
+            <input id="esServerId" type="number" class="form-control form-control-sm" min="0" />
+            <div class="field-help" id="esIdHelp"></div>
+          </div>
+          <div class="col-4">
             <label class="form-label">IP Address</label>
             <input id="esIp" class="form-control form-control-sm" />
           </div>
@@ -631,11 +590,37 @@
               <option value="false">1-based</option>
             </select>
           </div>
+          <div class="col-12" id="esQuickSlaves">
+            <hr class="my-2" />
+            <small class="text-muted">Quick-add slaves for this server:</small>
+            <div class="row g-2 mt-1">
+              <div class="col-4 col-md-2">
+                <label class="form-label">Num Slaves</label>
+                <input id="esNumSlaves" type="number" class="form-control form-control-sm" value="1" min="1" />
+              </div>
+              <div class="col-4 col-md-2">
+                <label class="form-label">CO size</label>
+                <input id="esQCo" type="number" class="form-control form-control-sm" value="100" />
+              </div>
+              <div class="col-4 col-md-2">
+                <label class="form-label">DI size</label>
+                <input id="esQDi" type="number" class="form-control form-control-sm" value="100" />
+              </div>
+              <div class="col-4 col-md-2">
+                <label class="form-label">HR size</label>
+                <input id="esQHr" type="number" class="form-control form-control-sm" value="100" />
+              </div>
+              <div class="col-4 col-md-2">
+                <label class="form-label">IR size</label>
+                <input id="esQIr" type="number" class="form-control form-control-sm" value="100" />
+              </div>
+            </div>
+          </div>
         </div>
       </div>
       <div class="modal-footer">
         <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
-        <button type="button" class="btn btn-primary btn-sm" onclick="saveEditServer()"><i class="bi bi-check-lg me-1"></i>Save Server</button>
+        <button type="button" class="btn btn-primary btn-sm" onclick="saveEditServer()"><i class="bi bi-check-lg me-1"></i><span id="esSaveLabel">Save Server</span></button>
       </div>
     </div>
   </div>

@@ -25,6 +25,8 @@ def mock_modbus_servers():
     class MockModbusServer:
         def __init__(self, server_id):
             self.server_id = server_id
+            self.zero_based = True
+            self._store = {}  # (slave_id, fc) -> list[int]
 
         def getDetails(self):
             return {
@@ -50,6 +52,34 @@ def mock_modbus_servers():
                     }
                 }
             }
+
+        def read_registers(self, slave_id, fc, address, count=1):
+            data = self._store.get((slave_id, fc), [])
+            padded = data + [0] * max(0, address + count - len(data))
+            return padded[address:address + count]
+
+        def write_registers(self, slave_id, fc, address, values):
+            key = (slave_id, fc)
+            data = self._store.setdefault(key, [])
+            if len(data) < address + len(values):
+                data.extend([0] * (address + len(values) - len(data)))
+            data[address:address + len(values)] = values
+
+        def write_float_registers(self, slave_id, address, float_values, fc=3):
+            import struct
+            words = []
+            for v in float_values:
+                hi, lo = struct.unpack('>HH', struct.pack('>f', float(v)))
+                words.extend([hi, lo])
+            self.write_registers(slave_id, fc, address, words)
+
+        def read_float_registers(self, slave_id, address, count=1, fc=3):
+            import struct
+            raw = self.read_registers(slave_id, fc, address, count * 2)
+            return [
+                struct.unpack('>f', struct.pack('>HH', raw[i], raw[i + 1]))[0]
+                for i in range(count)
+            ]
 
     return {0: MockModbusServer(0), 1: MockModbusServer(1)}
 
@@ -1032,6 +1062,101 @@ class TestRuleCRUD:
         existing_ids = {r["id"] for r in regs}
         for rule_id in ids:
             assert rule_id in existing_ids
+
+
+class TestDirectRegisterReadWrite:
+    """Direct read/write to the live Modbus datastore, independent of rules."""
+
+    def test_write_then_read_roundtrip(self, client):
+        w = client.post("/registers/write", json={
+            "server_id": 0, "slave_id": 0, "register_type": "hr",
+            "address": 10, "values": [42],
+        })
+        assert w.status_code == 200
+        assert w.json()["success"] is True
+
+        r = client.get("/registers/read", params={
+            "server_id": 0, "slave_id": 0, "register_type": "hr", "address": 10,
+        })
+        assert r.status_code == 200
+        data = r.json()
+        assert data["success"] is True
+        assert data["values"] == [42]
+
+    def test_write_range_then_read_range(self, client):
+        client.post("/registers/write", json={
+            "server_id": 0, "slave_id": 0, "register_type": "hr",
+            "address": 20, "values": [1, 2, 3],
+        })
+        r = client.get("/registers/read", params={
+            "server_id": 0, "slave_id": 0, "register_type": "hr",
+            "address": 20, "count": 3,
+        })
+        assert r.json()["values"] == [1, 2, 3]
+
+    def test_write_unknown_server_fails(self, client):
+        w = client.post("/registers/write", json={
+            "server_id": 99, "slave_id": 0, "register_type": "hr",
+            "address": 0, "values": [1],
+        })
+        assert w.status_code == 200
+        assert w.json()["success"] is False
+
+    def test_read_unknown_server_fails(self, client):
+        r = client.get("/registers/read", params={
+            "server_id": 99, "slave_id": 0, "register_type": "hr", "address": 0,
+        })
+        assert r.status_code == 200
+        assert r.json()["success"] is False
+
+    def test_write_invalid_register_type_fails(self, client):
+        w = client.post("/registers/write", json={
+            "server_id": 0, "slave_id": 0, "register_type": "bogus",
+            "address": 0, "values": [1],
+        })
+        assert w.json()["success"] is False
+
+    def test_write_empty_values_fails(self, client):
+        w = client.post("/registers/write", json={
+            "server_id": 0, "slave_id": 0, "register_type": "hr",
+            "address": 0, "values": [],
+        })
+        assert w.json()["success"] is False
+
+    def test_float32_write_rejected_for_coils(self, client):
+        w = client.post("/registers/write", json={
+            "server_id": 0, "slave_id": 0, "register_type": "co",
+            "address": 0, "values": [1.0], "float32": True,
+        })
+        assert w.json()["success"] is False
+
+    def test_float32_roundtrip(self, client):
+        w = client.post("/registers/write", json={
+            "server_id": 0, "slave_id": 0, "register_type": "hr",
+            "address": 30, "values": [3.14], "float32": True,
+        })
+        assert w.json()["success"] is True
+
+        r = client.get("/registers/read", params={
+            "server_id": 0, "slave_id": 0, "register_type": "hr",
+            "address": 30, "float32": True,
+        })
+        assert r.json()["values"][0] == pytest.approx(3.14, abs=1e-3)
+
+    def test_zero_based_offset_applied(self, client, mock_modbus_servers):
+        mock_modbus_servers[0].zero_based = False
+        client.post("/registers/write", json={
+            "server_id": 0, "slave_id": 0, "register_type": "hr",
+            "address": 1, "values": [777],
+        })
+        # 1-based user address 1 -> internal offset 0
+        raw = mock_modbus_servers[0].read_registers(0, 3, 0, 1)
+        assert raw == [777]
+
+        r = client.get("/registers/read", params={
+            "server_id": 0, "slave_id": 0, "register_type": "hr", "address": 1,
+        })
+        assert r.json()["values"] == [777]
 
 
 class TestServerCRUD:

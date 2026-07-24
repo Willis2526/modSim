@@ -238,6 +238,31 @@ class SingleRegisterRule(BaseModel):
         }
 
 
+class RegisterWriteRequest(BaseModel):
+    """Writes value(s) directly into a live server's Modbus datastore,
+    bypassing the rule/simulation engine entirely. If the target address is
+    also covered by an active simulation rule, the simulation loop will
+    overwrite this value on its next tick (~1s)."""
+    server_id: int
+    slave_id: int
+    register_type: str  # co | di | hr | ir — one type per write, no "all"
+    address: int
+    values: list  # length 1 for a single write, N for a contiguous range
+    float32: bool = False  # hr/ir only — each value is packed as 2 registers
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "server_id": 0,
+                "slave_id": 0,
+                "register_type": "hr",
+                "address": 100,
+                "values": [42],
+                "float32": False,
+            }
+        }
+
+
 class ImportPayload(BaseModel):
     # "merge" (default) upserts servers/slaves by id and register rules by their
     # natural key, leaving anything not in the payload untouched. "replace" wipes
@@ -413,6 +438,32 @@ class WebServer(threading.Thread):
             tags=["Live Data"],
             summary="Raw Modbus context for a server",
             description="Returns the internal Modbus context object for the specified server. Useful for debugging register state.",
+        )
+        self.app.add_api_route(
+            path="/registers/read",
+            endpoint=self.read_register_handler,
+            methods=["GET"],
+            tags=["Live Data"],
+            summary="Read a live register directly by address",
+            description=(
+                "Reads the current value(s) at an arbitrary address, independent of "
+                "whether a simulation rule exists for it. Unlike /live-values (which "
+                "iterates every rule-covered address for a server), this targets one "
+                "address you specify directly."
+            ),
+        )
+        self.app.add_api_route(
+            path="/registers/write",
+            endpoint=self.write_register_handler,
+            methods=["POST"],
+            tags=["Live Data"],
+            summary="Write directly to a live register",
+            description=(
+                "Writes one or more raw values directly into a running server's live "
+                "Modbus datastore, bypassing the rule/simulation engine. If the target "
+                "address is also covered by an active simulation rule, the simulation "
+                "loop will overwrite this value on its next tick (~1s)."
+            ),
         )
 
         # ── Servers ───────────────────────────────────────────────────────────
@@ -712,6 +763,73 @@ class WebServer(threading.Thread):
             return {"success": True, "server_id": server_id, "values": values}
         except Exception as e:
             logger.error("Error in live_values_handler: %s", e)
+            return {"success": False, "message": str(e)}
+
+    _REG_TYPE_CODES = {"co": 1, "di": 2, "hr": 3, "ir": 4}
+
+    def read_register_handler(
+        self,
+        server_id: int = Query(..., description="Server ID"),
+        slave_id: int = Query(..., description="Slave ID"),
+        register_type: str = Query(..., description="co | di | hr | ir"),
+        address: int = Query(..., description="User-facing address (respects the server's zero_based setting)"),
+        count: int = Query(1, ge=1, le=125, description="Number of values to read"),
+        float32: bool = Query(False, description="Decode as IEEE-754 float32 (hr/ir only, 2 registers per value)"),
+    ):
+        """Read value(s) at an arbitrary address, independent of whether a simulation rule exists for it."""
+        modbus_server = self.modbus_servers.get(server_id)
+        if not modbus_server:
+            return {"success": False, "message": f"Server {server_id} is not running"}
+        if register_type not in self._REG_TYPE_CODES:
+            return {"success": False, "message": f"Invalid register_type '{register_type}'"}
+        if float32 and register_type not in ("hr", "ir"):
+            return {"success": False, "message": "float32 is only valid for hr/ir register types"}
+
+        func_code = self._REG_TYPE_CODES[register_type]
+        addr_offset = 0 if getattr(modbus_server, "zero_based", True) else 1
+        read_start = address - addr_offset
+
+        try:
+            if float32:
+                values = modbus_server.read_float_registers(slave_id, read_start, count, fc=func_code)
+            else:
+                values = modbus_server.read_registers(slave_id, func_code, read_start, count)
+            return {
+                "success": True, "server_id": server_id, "slave_id": slave_id,
+                "register_type": register_type, "address": address, "values": list(values),
+            }
+        except Exception as e:
+            logger.error("Error in read_register_handler: %s", e)
+            return {"success": False, "message": str(e)}
+
+    def write_register_handler(self, req: RegisterWriteRequest):
+        """Write value(s) directly into a running server's live Modbus datastore."""
+        modbus_server = self.modbus_servers.get(req.server_id)
+        if not modbus_server:
+            return {"success": False, "message": f"Server {req.server_id} is not running"}
+        if req.register_type not in self._REG_TYPE_CODES:
+            return {"success": False, "message": f"Invalid register_type '{req.register_type}'"}
+        if req.float32 and req.register_type not in ("hr", "ir"):
+            return {"success": False, "message": "float32 is only valid for hr/ir register types"}
+        if not req.values:
+            return {"success": False, "message": "values must contain at least one value"}
+
+        func_code = self._REG_TYPE_CODES[req.register_type]
+        addr_offset = 0 if getattr(modbus_server, "zero_based", True) else 1
+        write_start = req.address - addr_offset
+
+        try:
+            if req.float32:
+                modbus_server.write_float_registers(req.slave_id, write_start, req.values, fc=func_code)
+            else:
+                modbus_server.write_registers(req.slave_id, func_code, write_start, req.values)
+            return {
+                "success": True, "server_id": req.server_id, "slave_id": req.slave_id,
+                "register_type": req.register_type, "address": req.address, "values": req.values,
+                "message": "Register(s) written.",
+            }
+        except Exception as e:
+            logger.error("Error in write_register_handler: %s", e)
             return {"success": False, "message": str(e)}
 
     # ── Existing handlers (unchanged) ─────────────────────────────────────────

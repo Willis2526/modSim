@@ -5,6 +5,10 @@ var _editServerData = {};
 var _editRuleData   = {};
 var _editSlaveData  = {};
 
+var _regsRaw    = [];                                    // last-fetched rows, untouched
+var _regsSort   = { key: null, dir: 0 };                  // dir: 0=none, 1=asc, -1=desc
+var _regsFilter = { server: '', slave: '', type: '', q: '' };
+
 // ── Router ────────────────────────────────────────────────────────────────────
 var ROUTES = [
     { path: '/',              page: 'pDash',   title: 'Dashboard',       load: function() { loadDash(); } },
@@ -84,10 +88,12 @@ async function loadDash() {
 
 // ── Servers ───────────────────────────────────────────────────────────────────
 async function loadServers() {
-    var res = await api('/get-server-config');
     var wrap = document.getElementById('serverCardsWrap');
+    wrap.innerHTML = '<div class="col-12">' + loadingStateHtml() + '</div>';
+
+    var res = await api('/get-server-config');
     if (!res.success) {
-        wrap.innerHTML = '<div class="col-12"><p class="text-muted">Failed to load servers.</p></div>';
+        wrap.innerHTML = '<div class="col-12">' + emptyStateHtml('bi-exclamation-triangle', 'Failed to load servers.') + '</div>';
         return;
     }
 
@@ -109,7 +115,7 @@ async function loadServers() {
                    '<div class="server-card-sub"><span class="badge ' + (s.zero_based === false ? 'bg-warning text-dark' : 'bg-secondary') + '" style="font-size:.6rem">' + (s.zero_based === false ? '1-based' : '0-based') + '</span></div>' +
                    '</div></div>';
           }).join('')
-        : '<div class="col-12"><p class="text-muted">No servers configured.</p></div>';
+        : '<div class="col-12">' + emptyStateHtml('bi-hdd-network', 'No servers configured.', 'Add Server', 'openAddServer()') + '</div>';
 
     _editSlaveData = {};
     res.slaves.forEach(function(s) { _editSlaveData[s.server_id + '_' + s.slave_id] = s; });
@@ -123,47 +129,6 @@ async function loadServers() {
                '<button class="btn-row-del" onclick="deleteSlave(' + s.server_id + ',' + s.slave_id + ')" title="Delete slave"><i class="bi bi-trash3"></i></button>' +
                '</td>';
     });
-}
-
-async function addServer() {
-    var body = {
-        server_id:    int('asId'),
-        ip:           val('asIp') || '0.0.0.0',
-        port:         int('asPort'),
-        vendor_name:  val('asVendor') || 'ModbusSimulator',
-        product_code: val('asPcode') || 'MSIM',
-        version:      val('asVer') || '1.0',
-        zero_based:   val('asBase') !== 'false'
-    };
-    var res = await api('/servers/add', 'POST', body);
-    if (!res.success) { toast('Error: ' + res.message, 'danger'); return; }
-
-    // Auto-create slaves if num_slaves > 0
-    var numSlaves = int('asSlaves') || 0;
-    var slaveTasks = [];
-    for (var i = 0; i < numSlaves; i++) {
-        slaveTasks.push(api('/configure-server', 'POST', {
-            // Use configure-server with a single-slave detailed payload per slave
-        }));
-    }
-    // Build slaves inline via upsert_slave (we can reuse configure-server with DetailedServerConfig)
-    if (numSlaves > 0) {
-        var slaves = [];
-        for (var j = 0; j < numSlaves; j++) {
-            slaves.push({
-                server_id: body.server_id,
-                slave_id:  j,
-                co_size:   int('asCo') || 100,
-                di_size:   int('asDi') || 100,
-                hr_size:   int('asHr') || 100,
-                ir_size:   int('asIr') || 100
-            });
-        }
-        await api('/configure-server', 'POST', { servers: [body], slaves: slaves });
-    }
-
-    toast(res.message || 'Server saved', 'success');
-    loadServers();
 }
 
 async function deleteServer(serverId) {
@@ -206,25 +171,98 @@ async function advApply() {
 }
 
 // ── Registers ─────────────────────────────────────────────────────────────────
-async function loadRegs() {
-    var res = await api('/get-registers');
-    var wrap = document.getElementById('regsWrap');
-    var rows = (res.success && res.registers) ? res.registers : [];
+var REGS_COLUMNS = [
+    { key: 'id',              label: 'ID',    numeric: true },
+    { key: 'server_id',       label: 'Srv',   numeric: true },
+    { key: 'slave_id',        label: 'Slave', numeric: true },
+    { key: 'register_type',   label: 'Type',  numeric: false },
+    { key: 'address',         label: 'Addr',  numeric: true },
+    { key: 'address_end',     label: 'End',   numeric: true },
+    { key: 'simulation_mode', label: 'Mode',  numeric: false }
+];
 
-    if (!rows.length) {
-        wrap.innerHTML = '<p class="text-muted p-3 mb-0">No register rules configured.</p>';
+async function loadRegs() {
+    var wrap = document.getElementById('regsWrap');
+    wrap.innerHTML = loadingStateHtml();
+
+    var res = await api('/get-registers');
+    _regsRaw = (res.success && res.registers) ? res.registers : [];
+
+    _editRuleData = {};
+    _regsRaw.forEach(function(r) { _editRuleData[r.id] = r; });
+
+    populateRegsServerFilter();
+    renderRegsTable();
+}
+
+function populateRegsServerFilter() {
+    var sel = document.getElementById('rfServer');
+    if (!sel) return;
+    var current = sel.value;
+    var servers = Array.from(new Set(_regsRaw.map(function(r) { return r.server_id; })
+        .filter(function(id) { return id != null; }))).sort(function(a, b) { return a - b; });
+    sel.innerHTML = '<option value="">All Servers</option>' +
+        servers.map(function(id) { return '<option value="' + id + '">Server ' + id + '</option>'; }).join('');
+    sel.value = current;
+}
+
+function applyRegsFilterSort(rows) {
+    var f = _regsFilter;
+    var filtered = rows.filter(function(r) {
+        if (f.server !== '' && String(r.server_id) !== f.server) return false;
+        if (f.slave  !== '' && String(r.slave_id)  !== f.slave)  return false;
+        if (f.type   !== '' && r.register_type !== f.type) return false;
+        if (f.q) {
+            var cfg = JSON.stringify(r.simulation_config || {});
+            var haystack = [r.id, r.address, r.address_end, r.simulation_mode, cfg]
+                .join(' ').toLowerCase();
+            if (haystack.indexOf(f.q.toLowerCase()) === -1) return false;
+        }
+        return true;
+    });
+
+    if (!_regsSort.key || !_regsSort.dir) return filtered;
+    var col = REGS_COLUMNS.find(function(c) { return c.key === _regsSort.key; });
+    var dir = _regsSort.dir;
+    return filtered.slice().sort(function(a, b) {
+        var av = a[_regsSort.key], bv = b[_regsSort.key];
+        if (av == null && bv == null) return 0;
+        if (av == null) return 1;   // nulls last regardless of direction
+        if (bv == null) return -1;
+        if (col && col.numeric) return (av - bv) * dir;
+        return String(av).localeCompare(String(bv)) * dir;
+    });
+}
+
+function renderRegsTable() {
+    var wrap = document.getElementById('regsWrap');
+    var caption = document.getElementById('regsCaption');
+
+    if (!_regsRaw.length) {
+        wrap.innerHTML = emptyStateHtml('bi-table', 'No register rules configured.', 'Add Rule', 'openAddRule()');
+        if (caption) caption.textContent = '';
         return;
     }
 
-    _editRuleData = {};
-    rows.forEach(function(r) { _editRuleData[r.id] = r; });
+    var rows = applyRegsFilterSort(_regsRaw);
+    if (caption) caption.textContent = 'Showing ' + rows.length + ' of ' + _regsRaw.length + ' rule(s)';
+
+    if (!rows.length) {
+        wrap.innerHTML = emptyStateHtml('bi-funnel', 'No rules match your filters.', 'Clear filters', 'clearRegsFilters()');
+        return;
+    }
+
+    var thead = '<tr>' + REGS_COLUMNS.map(function(c) {
+        var active = _regsSort.key === c.key && _regsSort.dir !== 0;
+        var icon = active ? (_regsSort.dir === 1 ? 'bi-caret-up-fill' : 'bi-caret-down-fill') : '';
+        return '<th class="th-sortable' + (active ? ' active' : '') + '" onclick="onRegsHeaderClick(\'' + c.key + '\')">' +
+               c.label + (icon ? ' <i class="bi ' + icon + ' sort-icon"></i>' : '') + '</th>';
+    }).join('') + '<th>Config</th><th></th></tr>';
+
     wrap.innerHTML =
         '<div class="table-responsive">' +
-        '<table class="table table-sm table-hover mb-0" id="rulesTable">' +
-        '<thead><tr>' +
-          '<th>ID</th><th>Srv</th><th>Slave</th><th>Type</th>' +
-          '<th>Addr</th><th>End</th><th>Mode</th><th>Config</th><th></th>' +
-        '</tr></thead><tbody>' +
+        '<table class="table table-sm table-hover table-compact mb-0" id="rulesTable">' +
+        '<thead>' + thead + '</thead><tbody>' +
         rows.map(function(r) {
             var cfg = r.simulation_config || {};
             var f32badge = cfg.float32 ? ' <span class="badge bg-warning text-dark" style="font-size:.6rem;vertical-align:middle">f32</span>' : '';
@@ -248,6 +286,42 @@ async function loadRegs() {
         '</tbody></table></div>';
 }
 
+function onRegsHeaderClick(key) {
+    if (_regsSort.key !== key) {
+        _regsSort = { key: key, dir: 1 };
+    } else if (_regsSort.dir === 1) {
+        _regsSort.dir = -1;
+    } else if (_regsSort.dir === -1) {
+        _regsSort = { key: null, dir: 0 };
+    } else {
+        _regsSort.dir = 1;
+    }
+    renderRegsTable();
+}
+
+var _regsFilterDebounce = null;
+function onRegsFilterChange() {
+    clearTimeout(_regsFilterDebounce);
+    _regsFilterDebounce = setTimeout(function() {
+        _regsFilter = {
+            server: val('rfServer'),
+            slave:  val('rfSlave'),
+            type:   val('rfType'),
+            q:      val('rfSearch').trim()
+        };
+        renderRegsTable();
+    }, 150);
+}
+
+function clearRegsFilters() {
+    ['rfServer', 'rfSlave', 'rfType', 'rfSearch'].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) el.value = '';
+    });
+    _regsFilter = { server: '', slave: '', type: '', q: '' };
+    renderRegsTable();
+}
+
 async function deleteRule(ruleId) {
     var res = await api('/rules/' + ruleId, 'DELETE');
     toast(res.success ? 'Rule ' + ruleId + ' deleted' : (res.message || 'Error'),
@@ -255,44 +329,10 @@ async function deleteRule(ruleId) {
     if (res.success) loadRegs();
 }
 
-async function addRule() {
-    var configRaw = document.getElementById('arConfig').value || '{}';
-    var simConfig;
-    try { simConfig = JSON.parse(configRaw); }
-    catch (e) { toast('simulation_config: invalid JSON — ' + e.message, 'danger'); return; }
-
-    // Float32 checkbox is authoritative — sync it into the config object
-    if (document.getElementById('arFloat32').checked) simConfig.float32 = true;
-    else delete simConfig.float32;
-
-    var srvVal = document.getElementById('arSrv').value.trim();
-    var endVal = document.getElementById('arEnd').value.trim();
-    var sizeVal = document.getElementById('arSize').value.trim();
-
-    var body = {
-        server_id:         srvVal  !== '' ? parseInt(srvVal,  10) : null,
-        slave_id:          int('arSlave'),
-        register_type:     val('arType'),
-        address:           int('arAddr') || 0,
-        address_end:       endVal  !== '' ? parseInt(endVal,  10) : null,
-        register_size:     sizeVal !== '' ? parseInt(sizeVal, 10) : null,
-        simulate:          document.getElementById('arSim').checked,
-        simulation_mode:   val('arMode'),
-        simulation_config: simConfig
-    };
-
-    var res = await api('/rules/add', 'POST', body);
-    toast(
-        res.success ? ('Rule #' + res.id + ' added') : ('Error: ' + (res.message || 'unknown')),
-        res.success ? 'success' : 'danger'
-    );
-    if (res.success) loadRegs();
-}
-
 // Auto-fill sensible default configs when mode or float32 changes
 function fillModeDefaults() {
-    var mode = val('arMode');
-    var f32 = document.getElementById('arFloat32').checked;
+    var mode = val('erMode');
+    var f32 = document.getElementById('erFloat32').checked;
     var defaults = f32 ? {
         static:   '{"value": 0.0}',
         random:   '{"min": 0.0, "max": 500.0}',
@@ -308,7 +348,7 @@ function fillModeDefaults() {
         square:   '{"high": 1, "low": 0, "period": 20, "duty_cycle": 0.5}',
         equation: '{"equation": "(x + address) % 1000"}'
     };
-    if (defaults[mode]) document.getElementById('arConfig').value = defaults[mode];
+    if (defaults[mode]) document.getElementById('erConfig').value = defaults[mode];
 }
 
 async function regApply() {
@@ -324,28 +364,42 @@ async function regApply() {
 var _editRuleModal = null;
 
 function openEditRule(r) {
-    var cfg = r.simulation_config || {};
-    document.getElementById('erRuleId').value    = r.id;
-    document.getElementById('erModalId').textContent = '#' + r.id;
-    document.getElementById('erSrv').value       = r.server_id != null ? r.server_id : '';
-    document.getElementById('erSlave').value     = r.slave_id;
-    document.getElementById('erType').value      = r.register_type;
-    document.getElementById('erAddr').value      = r.address != null ? r.address : 0;
-    document.getElementById('erEnd').value       = r.address_end != null ? r.address_end : '';
-    document.getElementById('erSize').value      = r.register_size != null ? r.register_size : '';
-    document.getElementById('erMode').value      = r.simulation_mode || 'static';
-    document.getElementById('erSim').checked     = !!r.simulate;
-    document.getElementById('erFloat32').checked = !!cfg.float32;
-    // Show config without the float32 key — the checkbox owns it
-    var display = Object.assign({}, cfg);
-    delete display.float32;
-    document.getElementById('erConfig').value    = JSON.stringify(display, null, 2);
-    if (!_editRuleModal) _editRuleModal = new bootstrap.Modal(document.getElementById('editRuleModal'));
+    var modal = document.getElementById('editRuleModal');
+    var isCreate = !r;
+    modal.dataset.mode = isCreate ? 'create' : 'edit';
+    document.getElementById('erModalVerb').textContent = isCreate ? 'Add Rule' : 'Edit Rule';
+    document.getElementById('erModalId').textContent   = isCreate ? '' : ('#' + r.id);
+    document.getElementById('erSaveLabel').textContent = isCreate ? 'Add Rule' : 'Save Rule';
+
+    var cfg = isCreate ? {} : (r.simulation_config || {});
+    document.getElementById('erRuleId').value    = isCreate ? '' : r.id;
+    document.getElementById('erSrv').value       = isCreate ? '' : (r.server_id != null ? r.server_id : '');
+    document.getElementById('erSlave').value     = isCreate ? 0  : r.slave_id;
+    document.getElementById('erType').value      = isCreate ? 'ir' : r.register_type;
+    document.getElementById('erAddr').value      = isCreate ? 0  : (r.address != null ? r.address : 0);
+    document.getElementById('erEnd').value       = isCreate ? '' : (r.address_end != null ? r.address_end : '');
+    document.getElementById('erSize').value      = isCreate ? '' : (r.register_size != null ? r.register_size : '');
+    document.getElementById('erMode').value      = isCreate ? 'static' : (r.simulation_mode || 'static');
+    document.getElementById('erSim').checked     = isCreate ? true : !!r.simulate;
+    document.getElementById('erFloat32').checked = isCreate ? false : !!cfg.float32;
+    if (isCreate) {
+        document.getElementById('erConfig').value = '{"value": 0}';
+    } else {
+        // Show config without the float32 key — the checkbox owns it
+        var display = Object.assign({}, cfg);
+        delete display.float32;
+        document.getElementById('erConfig').value = JSON.stringify(display, null, 2);
+    }
+
+    if (!_editRuleModal) _editRuleModal = new bootstrap.Modal(modal);
     _editRuleModal.show();
 }
 
+function openAddRule() { openEditRule(null); }
+
 async function saveEditRule() {
-    var ruleId    = parseInt(document.getElementById('erRuleId').value, 10);
+    var modal = document.getElementById('editRuleModal');
+    var isCreate = modal.dataset.mode === 'create';
     var configRaw = document.getElementById('erConfig').value || '{}';
     var simConfig;
     try { simConfig = JSON.parse(configRaw); }
@@ -371,6 +425,17 @@ async function saveEditRule() {
         simulation_config: simConfig
     };
 
+    if (isCreate) {
+        var res = await api('/rules/add', 'POST', body);
+        toast(
+            res.success ? ('Rule #' + res.id + ' added') : ('Error: ' + (res.message || 'unknown')),
+            res.success ? 'success' : 'danger'
+        );
+        if (res.success) { _editRuleModal.hide(); loadRegs(); }
+        return;
+    }
+
+    var ruleId = parseInt(document.getElementById('erRuleId').value, 10);
     var res = await api('/rules/' + ruleId, 'PUT', body);
     toast(res.message || (res.success ? 'Saved' : 'Error'), res.success ? 'success' : 'danger');
     if (res.success) { _editRuleModal.hide(); loadRegs(); }
@@ -380,20 +445,49 @@ async function saveEditRule() {
 var _editServerModal = null;
 
 function openEditServer(s) {
-    document.getElementById('esServerId').value  = s.server_id;
-    document.getElementById('esModalId').textContent = '#' + s.server_id;
-    document.getElementById('esIp').value        = s.ip;
-    document.getElementById('esPort').value      = s.port;
-    document.getElementById('esVendor').value    = s.vendor_name;
-    document.getElementById('esPcode').value     = s.product_code;
-    document.getElementById('esVer').value       = s.version;
-    document.getElementById('esBase').value      = (s.zero_based === false ? 'false' : 'true');
-    if (!_editServerModal) _editServerModal = new bootstrap.Modal(document.getElementById('editServerModal'));
+    var modal = document.getElementById('editServerModal');
+    var isCreate = !s;
+    modal.dataset.mode = isCreate ? 'create' : 'edit';
+    document.getElementById('esModalVerb').textContent = isCreate ? 'Add Server' : 'Edit Server';
+    document.getElementById('esModalId').textContent   = isCreate ? '' : ('#' + s.server_id);
+    document.getElementById('esSaveLabel').textContent = isCreate ? 'Add Server' : 'Save Server';
+
+    var idInput = document.getElementById('esServerId');
+    idInput.value = isCreate ? '' : s.server_id;
+    idInput.readOnly = !isCreate;
+
+    document.getElementById('esIp').value        = isCreate ? '0.0.0.0'         : s.ip;
+    document.getElementById('esPort').value      = isCreate ? 502              : s.port;
+    document.getElementById('esVendor').value    = isCreate ? 'ModbusSimulator' : s.vendor_name;
+    document.getElementById('esPcode').value     = isCreate ? 'MSIM'            : s.product_code;
+    document.getElementById('esVer').value       = isCreate ? '1.0'             : s.version;
+    document.getElementById('esBase').value      = isCreate ? 'true' : (s.zero_based === false ? 'false' : 'true');
+
+    document.getElementById('esQuickSlaves').classList.toggle('d-none', !isCreate);
+    if (isCreate) {
+        document.getElementById('esNumSlaves').value = 1;
+        document.getElementById('esQCo').value = 100;
+        document.getElementById('esQDi').value = 100;
+        document.getElementById('esQHr').value = 100;
+        document.getElementById('esQIr').value = 100;
+    }
+
+    if (!_editServerModal) _editServerModal = new bootstrap.Modal(modal);
     _editServerModal.show();
 }
 
+function openAddServer() { openEditServer(null); }
+
 async function saveEditServer() {
+    var modal = document.getElementById('editServerModal');
+    var isCreate = modal.dataset.mode === 'create';
     var serverId = parseInt(document.getElementById('esServerId').value, 10);
+    if (isNaN(serverId)) { toast('Server ID is required', 'danger'); return; }
+
+    if (isCreate && _editServerData[serverId]) {
+        if (!confirm('Server ' + serverId + ' already exists and will be overwritten — continue?')) return;
+    }
+
     var body = {
         server_id:    serverId,
         ip:           document.getElementById('esIp').value,
@@ -403,29 +497,81 @@ async function saveEditServer() {
         version:      document.getElementById('esVer').value,
         zero_based:   document.getElementById('esBase').value !== 'false'
     };
-    var res = await api('/servers/' + serverId, 'PUT', body);
-    toast(res.message || (res.success ? 'Saved' : 'Error'), res.success ? 'success' : 'danger');
-    if (res.success) { _editServerModal.hide(); loadServers(); }
+
+    var res = isCreate
+        ? await api('/servers/add', 'POST', body)
+        : await api('/servers/' + serverId, 'PUT', body);
+    if (!res.success) { toast('Error: ' + res.message, 'danger'); return; }
+
+    if (isCreate) {
+        var numSlaves = parseInt(document.getElementById('esNumSlaves').value, 10) || 0;
+        var coSize = parseInt(document.getElementById('esQCo').value, 10) || 100;
+        var diSize = parseInt(document.getElementById('esQDi').value, 10) || 100;
+        var hrSize = parseInt(document.getElementById('esQHr').value, 10) || 100;
+        var irSize = parseInt(document.getElementById('esQIr').value, 10) || 100;
+        // One upsert per slave — non-destructive, unlike /configure-server which
+        // replaces the *entire* server/slave topology and would wipe every other server.
+        for (var j = 0; j < numSlaves; j++) {
+            await api('/slaves/' + serverId + '/' + j, 'PUT', {
+                server_id: serverId, slave_id: j,
+                co_size: coSize, di_size: diSize, hr_size: hrSize, ir_size: irSize
+            });
+        }
+    }
+
+    toast(res.message || 'Saved', 'success');
+    _editServerModal.hide();
+    loadServers();
 }
 
 // ── Edit slave modal ──────────────────────────────────────────────────────────
 var _editSlaveModal = null;
 
 function openEditSlave(s) {
-    document.getElementById('slServerId').value      = s.server_id;
-    document.getElementById('slSlaveId').value       = s.slave_id;
-    document.getElementById('slModalId').textContent = 'Srv ' + s.server_id + ' / Slave ' + s.slave_id;
-    document.getElementById('slCo').value = s.co_size;
-    document.getElementById('slDi').value = s.di_size;
-    document.getElementById('slHr').value = s.hr_size;
-    document.getElementById('slIr').value = s.ir_size;
-    if (!_editSlaveModal) _editSlaveModal = new bootstrap.Modal(document.getElementById('editSlaveModal'));
+    var modal = document.getElementById('editSlaveModal');
+    var isCreate = !s;
+    modal.dataset.mode = isCreate ? 'create' : 'edit';
+    document.getElementById('slModalVerb').textContent = isCreate ? 'Add Slave' : 'Edit Slave';
+    document.getElementById('slModalId').textContent   = isCreate ? '' : ('Srv ' + s.server_id + ' / Slave ' + s.slave_id);
+    document.getElementById('slSaveLabel').textContent = isCreate ? 'Add Slave' : 'Save Slave';
+
+    var srvInput   = document.getElementById('slServerId');
+    var slaveInput = document.getElementById('slSlaveId');
+    srvInput.value   = isCreate ? '' : s.server_id;
+    slaveInput.value = isCreate ? '' : s.slave_id;
+    srvInput.readOnly   = !isCreate;
+    slaveInput.readOnly = !isCreate;
+    document.getElementById('slServerHelp').textContent = isCreate ? 'Must match an existing server ID' : '';
+    document.getElementById('slSlaveHelp').textContent  = isCreate ? 'Must be unique for this server' : '';
+
+    document.getElementById('slCo').value = isCreate ? 100 : s.co_size;
+    document.getElementById('slDi').value = isCreate ? 100 : s.di_size;
+    document.getElementById('slHr').value = isCreate ? 100 : s.hr_size;
+    document.getElementById('slIr').value = isCreate ? 100 : s.ir_size;
+
+    if (!_editSlaveModal) _editSlaveModal = new bootstrap.Modal(modal);
     _editSlaveModal.show();
 }
 
+function openAddSlave() { openEditSlave(null); }
+
 async function saveEditSlave() {
+    var modal = document.getElementById('editSlaveModal');
+    var isCreate = modal.dataset.mode === 'create';
     var serverId = parseInt(document.getElementById('slServerId').value, 10);
     var slaveId  = parseInt(document.getElementById('slSlaveId').value,  10);
+    if (isNaN(serverId) || isNaN(slaveId)) { toast('Server ID and Slave ID are required', 'danger'); return; }
+
+    if (isCreate) {
+        if (!_editServerData[serverId]) {
+            toast('Server ' + serverId + ' does not exist — add it first', 'danger');
+            return;
+        }
+        if (_editSlaveData[serverId + '_' + slaveId]) {
+            if (!confirm('Slave ' + slaveId + ' already exists on server ' + serverId + ' and will be overwritten — continue?')) return;
+        }
+    }
+
     var body = {
         server_id: serverId,
         slave_id:  slaveId,
@@ -485,6 +631,91 @@ async function fetchLive() {
             '<td><span class="badge bg-info text-dark mode-badge">' + (v.simulation_mode || '') + '</span></td>' +
             '</tr>';
     }).join('');
+}
+
+// ── Direct register read/write ──────────────────────────────────────────────────
+function onDrwTypeChange() {
+    var type = val('drwType');
+    var f32 = document.getElementById('drwFloat32');
+    var isBit = (type === 'co' || type === 'di');
+    f32.disabled = isBit;
+    if (isBit) f32.checked = false;
+    checkRuleOverlap();
+}
+
+async function checkRuleOverlap() {
+    var banner = document.getElementById('drwWarning');
+    var serverId = int('drwServer');
+    var slaveId  = int('drwSlave');
+    var type     = val('drwType');
+    var addr     = int('drwAddr');
+    if (isNaN(serverId) || isNaN(slaveId) || isNaN(addr)) { banner.classList.add('d-none'); return; }
+
+    var res = await api('/get-registers');
+    if (!res.success) { banner.classList.add('d-none'); return; }
+
+    var match = (res.registers || []).find(function(r) {
+        if (!r.simulate) return false;
+        if (r.server_id !== serverId) return false;
+        if (r.slave_id  !== slaveId)  return false;
+        if (r.register_type !== type) return false;
+        var start = r.address != null ? r.address : 0;
+        var end = r.address_end != null ? r.address_end : start;
+        return addr >= start && addr <= end;
+    });
+
+    if (match) {
+        banner.innerHTML = '<i class="bi bi-exclamation-triangle-fill"></i>Address ' + addr +
+            ' is covered by an active simulation rule (mode: ' + (match.simulation_mode || 'unknown') +
+            ') — writes here will be overwritten within ~1s.';
+        banner.classList.remove('d-none');
+    } else {
+        banner.classList.add('d-none');
+    }
+}
+
+function drwParams() {
+    return {
+        server_id: int('drwServer'),
+        slave_id: int('drwSlave'),
+        register_type: val('drwType'),
+        address: int('drwAddr')
+    };
+}
+
+async function directRead() {
+    var p = drwParams();
+    var count = int('drwCount') || 1;
+    var float32 = document.getElementById('drwFloat32').checked;
+    var qs = new URLSearchParams({
+        server_id: p.server_id, slave_id: p.slave_id, register_type: p.register_type,
+        address: p.address, count: count, float32: float32
+    }).toString();
+    var res = await api('/registers/read?' + qs);
+    var out = document.getElementById('drwResult');
+    if (!res.success) {
+        out.innerHTML = '<span style="color:var(--danger)">' + res.message + '</span>';
+        return;
+    }
+    out.innerHTML = '<code style="color:var(--accent)">' + JSON.stringify(res.values) + '</code>';
+    checkRuleOverlap();
+}
+
+async function directWrite() {
+    var p = drwParams();
+    var float32 = document.getElementById('drwFloat32').checked;
+    var raw = val('drwValues').trim();
+    if (!raw) { toast('Enter at least one value to write', 'danger'); return; }
+    var values = raw.split(',').map(function(s) {
+        var t = s.trim();
+        return float32 ? parseFloat(t) : parseInt(t, 10);
+    });
+    if (values.some(function(v) { return isNaN(v); })) { toast('Invalid value(s)', 'danger'); return; }
+
+    var body = Object.assign({}, p, { values: values, float32: float32 });
+    var res = await api('/registers/write', 'POST', body);
+    toast(res.message || (res.success ? 'Written' : 'Error'), res.success ? 'success' : 'danger');
+    if (res.success) directRead();
 }
 
 // ── Import / Export ───────────────────────────────────────────────────────────
@@ -578,6 +809,19 @@ function tbl(id, rows, rowFn) {
     tbody.innerHTML = (rows && rows.length)
         ? rows.map(function(r) { return '<tr>' + rowFn(r) + '</tr>'; }).join('')
         : '<tr><td colspan="99" class="text-center py-3" style="color:var(--text-muted)">None</td></tr>';
+}
+
+// ── Empty / loading state helpers ───────────────────────────────────────────────
+function emptyStateHtml(icon, message, ctaLabel, ctaOnclick) {
+    var cta = ctaLabel
+        ? '<button class="btn btn-sm btn-outline-secondary mt-1" onclick="' + ctaOnclick + '">' + ctaLabel + '</button>'
+        : '';
+    return '<div class="empty-state"><i class="bi ' + icon + '"></i><span>' + message + '</span>' + cta + '</div>';
+}
+
+function loadingStateHtml(message) {
+    return '<div class="loading-state"><span class="spinner-border spinner-border-sm"></span>' +
+           '<span>' + (message || 'Loading…') + '</span></div>';
 }
 
 function toast(msg, type) {
