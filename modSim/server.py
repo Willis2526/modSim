@@ -146,10 +146,11 @@ class Server:
                 server_config["ip"],
                 server_config["port"],
                 identity,
-                len(slaves),  # number of slaves
+                len(slaves),  # number of slaves (legacy count; slaves= below wins)
                 100,  # deprecated registers parameter (kept for compatibility)
                 register_sizes,
                 zero_based=server_config.get("zero_based", True),
+                slaves=slaves,  # real slave ids + per-slave register sizes
             )
             self.modbus_servers[server_id].start()
             logger.info(f"Started Modbus server {server_id} on {server_config['ip']}:{server_config['port']} with {len(slaves)} slave(s)")

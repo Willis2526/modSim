@@ -54,19 +54,31 @@ def _build_slave_simdevice(slave_id: int, co_size=100, di_size=100,
     ))
 
 
-def buildModbusContext(number_of_slaves, register_sizes=None):
-    """Build a _SimContext with one SimDevice per slave."""
+def buildModbusContext(slaves, register_sizes=None):
+    """Build a _SimContext with one SimDevice per slave.
+
+    `slaves` may be either:
+      - an int N (legacy): create slave ids 0..N-1, all using `register_sizes`; or
+      - a list of slave dicts, each with a `slave_id` and optional per-slave
+        `co_size`/`di_size`/`hr_size`/`ir_size` (falling back to `register_sizes`).
+
+    The list form preserves the actual slave ids from the configuration, so a
+    server can expose non-zero / non-contiguous ids (e.g. slaves 1 and 2 with no
+    slave 0) rather than always 0..N-1.
+    """
     if register_sizes is None:
         register_sizes = {"co": 100, "di": 100, "hr": 100, "ir": 100}
+    if isinstance(slaves, int):
+        slaves = [{"slave_id": i} for i in range(slaves)]
     devices = [
         _build_slave_simdevice(
-            slave_id,
-            co_size=register_sizes.get("co", 100),
-            di_size=register_sizes.get("di", 100),
-            hr_size=register_sizes.get("hr", 100),
-            ir_size=register_sizes.get("ir", 100),
+            s["slave_id"],
+            co_size=s.get("co_size", register_sizes.get("co", 100)),
+            di_size=s.get("di_size", register_sizes.get("di", 100)),
+            hr_size=s.get("hr_size", register_sizes.get("hr", 100)),
+            ir_size=s.get("ir_size", register_sizes.get("ir", 100)),
         )
-        for slave_id in range(number_of_slaves)
+        for s in slaves
     ]
     return _SimContext(devices)
 
@@ -119,7 +131,7 @@ class Server(threading.Thread):
 
     def __init__(self, server_id, address="0.0.0.0", port=502, identity={},
                  number_of_slaves=1, number_of_registers=100, register_sizes=None,
-                 zero_based=True):
+                 zero_based=True, slaves=None):
         super().__init__(name="mod_server", daemon=True)
         self._stop_event = threading.Event()
         self._loop = None            # event loop owned by this thread
@@ -141,7 +153,12 @@ class Server(threading.Thread):
         self.running = False
         self.regiser_type_map = {"all": 0, "co": 1, "hr": 3, "di": 2, "ir": 4}
         self.simulation_engine = SimulationEngine()
-        self.context = buildModbusContext(number_of_slaves, self.registerSizes)
+        # Prefer an explicit slave spec (real ids + per-slave sizes); fall back
+        # to the legacy count, which yields slave ids 0..number_of_slaves-1.
+        self.context = buildModbusContext(
+            slaves if slaves is not None else number_of_slaves,
+            self.registerSizes,
+        )
 
     def getDetails(self):
         return {

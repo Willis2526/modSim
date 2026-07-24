@@ -451,3 +451,51 @@ class TestOneBasedAddressing:
         # register 19..21 hold the user-facing addresses 20,21,22
         assert wire.registers == [20, 21, 22]
 
+
+# Non-contiguous slave ids (e.g. slaves 1 and 2 with no slave 0)
+
+_MULTISLAVE_PORT = 15032
+
+
+@pytest.fixture(scope="module")
+def multislave_server():
+    """A server whose slaves are ids 1 and 2 — there is no slave 0."""
+    srv = Server(
+        server_id=0,
+        address=_HOST,
+        port=_MULTISLAVE_PORT,
+        register_sizes={"co": 100, "di": 100, "hr": 100, "ir": 100},
+        slaves=[{"slave_id": 1, "hr_size": 100}, {"slave_id": 2, "hr_size": 100}],
+    )
+    srv.start()
+    assert _wait_for_server(_HOST, _MULTISLAVE_PORT), "multislave server did not start"
+    yield srv
+
+
+@pytest.fixture()
+def multislave_client(multislave_server):
+    c = ModbusTcpClient(_HOST, port=_MULTISLAVE_PORT, timeout=3)
+    assert c.connect(), "Could not connect to multislave server"
+    yield c
+    c.close()
+
+
+class TestNonContiguousSlaves:
+    def test_context_exposes_real_slave_ids(self, multislave_server):
+        assert sorted(multislave_server.context.device_ids()) == [1, 2]
+
+    def test_each_slave_addressed_independently(self, multislave_server, multislave_client):
+        multislave_server.simulate([
+            {"server_id": 0, "slave_id": 1, "register_type": "hr", "address": 10,
+             "simulate": True, "simulation_mode": "static", "simulation_config": {"value": 111}},
+            {"server_id": 0, "slave_id": 2, "register_type": "hr", "address": 10,
+             "simulate": True, "simulation_mode": "static", "simulation_config": {"value": 222}},
+        ])
+        assert multislave_client.read_holding_registers(10, count=1, device_id=1).registers[0] == 111
+        assert multislave_client.read_holding_registers(10, count=1, device_id=2).registers[0] == 222
+
+    def test_absent_slave_zero_is_not_served(self, multislave_server, multislave_client):
+        """Slave 0 was never configured, so requests to it error."""
+        resp = multislave_client.read_holding_registers(10, count=1, device_id=0)
+        assert resp.isError()
+
