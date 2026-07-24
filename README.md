@@ -8,7 +8,7 @@ A configurable Modbus TCP server with a browser-based UI and REST API. Supports 
 - **Browser UI** — dashboard, live register view, server/rule management, import/export, mobile-friendly
 - **Six simulation modes** — `random`, `static`, `sine`, `ramp`, `square`, `equation`
 - **Per-rule CRUD** — add, edit, and delete individual simulation rules without restart
-- **Import / Export** — backup and restore configuration (servers, slaves, or rules) as JSON; selective section support
+- **Import / Export** — backup and restore configuration (servers, slaves, or rules) as JSON; merge (additive/sync) or replace modes, with selective section support
 - **Persistent storage** — all runtime configuration stored in SQLite (`settings.db`)
 - **pymodbus 3.13 compatible** — uses `ModbusSimulatorContext` internally; no deprecated APIs
 
@@ -153,7 +153,7 @@ The browser interface is served at `/`. It provides:
 | Servers | Add, edit, delete server instances and their slaves |
 | Register Rules | Add, edit, delete simulation rules; inline mode-config editor |
 | Live Values | Real-time register snapshot, auto-refreshes every second |
-| Import / Export | Download the full config as JSON; upload to restore; selective section export |
+| Import / Export | Download the full config as JSON; upload to merge into or replace the current config; selective section export |
 | Reference | Simulation mode quick-reference |
 
 The UI is responsive and works on mobile (hamburger sidebar navigation).
@@ -364,19 +364,33 @@ The response includes `Content-Disposition: attachment` so browsers prompt to sa
 
 #### `POST /import` — import config
 
-Selective import — only sections present in the payload are replaced:
+The `mode` field selects how the payload is applied. Either way, only sections
+present in the payload are touched.
+
+| `mode` | Behavior |
+|--------|----------|
+| `merge` (default) | **Additive / sync.** Servers and slaves are upserted by id; register rules are upserted by their natural key `(server_id, slave_id, register_type, address, address_end)`. Anything not in the payload is left untouched, so re-importing the same file is idempotent (no duplicate rules). Use this to add a server to a running config. |
+| `replace` | Wipes and replaces each supplied section wholesale — servers/slaves/rules not named for that section are removed. |
 
 ```json
 {
+  "mode": "merge",
+  "servers": [
+    { "server_id": 2, "ip": "0.0.0.0", "port": 504,
+      "vendor_name": "ASCO", "product_code": "5210", "zero_based": false }
+  ],
+  "slaves": [
+    { "server_id": 2, "slave_id": 0, "hr_size": 100 }
+  ],
   "registers": [
-    { "slave_id": 1, "register_type": "ir", "address": 1121,
-      "simulate": true, "simulation_mode": "static",
-      "simulation_config": { "value": 3 } }
+    { "server_id": 2, "slave_id": 0, "register_type": "hr", "address": 17,
+      "simulate": true, "simulation_mode": "sine",
+      "simulation_config": { "offset": 480, "amplitude": 3, "period": 30 } }
   ]
 }
 ```
 
-Omit `servers`/`slaves` to replace only rules. Omit `registers` to replace only topology. Server changes trigger a restart.
+Omit `servers`/`slaves` to affect only rules. Omit `registers` to affect only topology. Server changes trigger a restart. The web UI's Import / Export page exposes the same modes via a Mode selector (defaulting to Merge).
 
 ---
 

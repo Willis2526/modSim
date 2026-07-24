@@ -17,7 +17,7 @@ document.querySelectorAll('.sidebar a[data-page]').forEach(function(link) {
         if (pageId === 'pDash')   loadDash();
         if (pageId === 'pRegs')   loadRegs();
         if (pageId === 'pServer') loadServers();
-        if (pageId === 'pImport') loadExportPreview();
+        if (pageId === 'pImport') { loadExportPreview(); updateImportModeHint(); }
     });
 });
 
@@ -502,12 +502,27 @@ function loadImportFile() {
     reader.readAsText(fileInput.files[0]);
 }
 
+function updateImportModeHint() {
+    var mode = document.getElementById('importMode').value;
+    var hint = document.getElementById('importModeHint');
+    if (mode === 'replace') {
+        hint.innerHTML = '<i class="bi bi-exclamation-triangle-fill"></i>Replace wipes each supplied section entirely before inserting — servers/slaves/rules not in the JSON for that section are removed.';
+        hint.classList.add('import-warning');
+    } else {
+        hint.innerHTML = '<i class="bi bi-info-circle"></i>Merge upserts servers &amp; slaves by id and rules by (server, slave, type, address); anything not in the JSON is left untouched. Re-importing is idempotent.';
+        hint.classList.remove('import-warning');
+    }
+}
+
 async function applyImport() {
     var raw = document.getElementById('importJson').value;
     var body;
     try { body = JSON.parse(raw); }
     catch (e) { toast('Invalid JSON: ' + e.message, 'danger'); return; }
-    if (!confirm('This will REPLACE all current configuration. Continue?')) return;
+    var mode = document.getElementById('importMode').value;
+    body.mode = mode;
+    if (mode === 'replace' &&
+        !confirm('REPLACE mode: each section present in the JSON will be wiped and replaced. Continue?')) return;
     var res = await api('/import', 'POST', body);
     toast(res.message || (res.success ? 'Imported' : 'Error'), res.success ? 'success' : 'danger');
     if (res.success) loadDash();

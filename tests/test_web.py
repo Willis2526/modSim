@@ -1148,6 +1148,75 @@ class TestExportImport:
         assert response.status_code == 200
         assert response.json()["success"] is False
 
+    def test_import_unknown_mode_fails(self, client):
+        response = client.post("/import", json={"mode": "bogus", "registers": []})
+        assert response.status_code == 200
+        assert response.json()["success"] is False
+
+
+class TestMergeImport:
+    """The additive/sync import mode (default) leaves existing config intact."""
+
+    def test_merge_adds_server_without_wiping_existing(self, client):
+        client.post("/servers/add", json={"server_id": 0, "ip": "0.0.0.0", "port": 502})
+        response = client.post("/import", json={
+            "mode": "merge",
+            "servers": [{"server_id": 2, "ip": "0.0.0.0", "port": 504,
+                         "vendor_name": "ASCO", "zero_based": False}],
+            "slaves": [{"server_id": 2, "slave_id": 0}],
+        })
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        ids = {s["server_id"] for s in client.get("/get-server-config").json()["servers"]}
+        assert ids == {0, 2}  # existing server 0 preserved, server 2 added
+
+    def test_merge_is_default_mode(self, client):
+        """Omitting mode behaves as merge, not replace."""
+        client.post("/servers/add", json={"server_id": 0, "ip": "0.0.0.0", "port": 502})
+        client.post("/import", json={"servers": [{"server_id": 2, "port": 504}],
+                                     "slaves": [{"server_id": 2, "slave_id": 0}]})
+        ids = {s["server_id"] for s in client.get("/get-server-config").json()["servers"]}
+        assert ids == {0, 2}
+
+    def test_merge_registers_upsert_is_idempotent(self, client):
+        rule = {"slave_id": 0, "register_type": "hr", "address": 17, "simulate": True,
+                "simulation_mode": "sine", "simulation_config": {"offset": 480}}
+        payload = {"mode": "merge", "registers": [rule]}
+
+        first = client.post("/import", json=payload).json()
+        assert first["success"] is True and "1 rule(s) added" in first["message"]
+
+        second = client.post("/import", json=payload).json()
+        assert second["success"] is True and "0 rule(s) added, 1 updated" in second["message"]
+
+        matches = [r for r in client.get("/get-registers").json()["registers"]
+                   if r["address"] == 17 and r["register_type"] == "hr"]
+        assert len(matches) == 1  # no duplicate created
+
+    def test_merge_updates_matching_rule_in_place(self, client):
+        base = {"slave_id": 0, "register_type": "hr", "address": 17, "simulate": True,
+                "simulation_mode": "sine"}
+        client.post("/import", json={"mode": "merge",
+                                     "registers": [{**base, "simulation_config": {"offset": 480}}]})
+        client.post("/import", json={"mode": "merge",
+                                     "registers": [{**base, "simulation_config": {"offset": 500}}]})
+        matches = [r for r in client.get("/get-registers").json()["registers"]
+                   if r["address"] == 17 and r["register_type"] == "hr"]
+        assert len(matches) == 1
+        assert matches[0]["simulation_config"]["offset"] == 500
+
+    def test_replace_mode_wipes_unlisted_servers(self, client):
+        client.post("/servers/add", json={"server_id": 0, "ip": "0.0.0.0", "port": 502})
+        response = client.post("/import", json={
+            "mode": "replace",
+            "servers": [{"server_id": 2, "ip": "0.0.0.0", "port": 504}],
+            "slaves": [{"server_id": 2, "slave_id": 0}],
+        })
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+        ids = {s["server_id"] for s in client.get("/get-server-config").json()["servers"]}
+        assert ids == {2}  # server 0 wiped by replace
+
     def test_restart_no_manager(self, client):
         response = client.post("/restart")
         assert response.status_code == 200

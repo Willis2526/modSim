@@ -430,3 +430,46 @@ class TestServerZeroBased:
         migrated = Database(temp_db.db_path)
         row = migrated.get_servers()[0]
         assert row["zero_based"] is True
+
+
+class TestUpsertRegister:
+    """upsert_register matches on the natural key for idempotent merge imports."""
+
+    def _rule(self, **over):
+        rule = {"slave_id": 0, "register_type": "hr", "address": 17,
+                "address_end": None, "simulate": True,
+                "simulation_mode": "sine", "simulation_config": {"offset": 480}}
+        rule.update(over)
+        return rule
+
+    def test_insert_when_absent(self, temp_db):
+        res = temp_db.upsert_register(self._rule())
+        assert res["success"] and res["action"] == "added"
+        assert len(temp_db.get_registers()) == 1
+
+    def test_update_when_key_matches(self, temp_db):
+        temp_db.upsert_register(self._rule(simulation_config={"offset": 480}))
+        res = temp_db.upsert_register(self._rule(simulation_config={"offset": 500}))
+        assert res["success"] and res["action"] == "updated"
+        regs = temp_db.get_registers()
+        assert len(regs) == 1
+        assert regs[0]["simulation_config"]["offset"] == 500
+
+    def test_different_address_inserts_new(self, temp_db):
+        temp_db.upsert_register(self._rule(address=17))
+        temp_db.upsert_register(self._rule(address=18))
+        assert len(temp_db.get_registers()) == 2
+
+    def test_null_server_id_and_address_end_match(self, temp_db):
+        """A rule with NULL server_id / address_end still matches itself (IS NULL)."""
+        temp_db.upsert_register(self._rule(server_id=None, address_end=None))
+        res = temp_db.upsert_register(self._rule(server_id=None, address_end=None,
+                                                 simulation_config={"offset": 12}))
+        assert res["action"] == "updated"
+        assert len(temp_db.get_registers()) == 1
+
+    def test_address_end_distinguishes_rules(self, temp_db):
+        """Same start address but different address_end are distinct rules."""
+        temp_db.upsert_register(self._rule(address=17, address_end=None))
+        temp_db.upsert_register(self._rule(address=17, address_end=20))
+        assert len(temp_db.get_registers()) == 2

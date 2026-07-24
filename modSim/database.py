@@ -203,6 +203,58 @@ class Database:
             logger.error(f"Error updating register {rule_id}: {e}")
             return {"success": False, "updated": False, "errors": [str(e)]}
 
+    def upsert_register(self, rule: dict) -> dict:
+        """Insert or update one register rule, matched on its natural key.
+
+        The natural key is (server_id, slave_id, register_type, address,
+        address_end). If a rule with that key already exists its simulation
+        settings are updated in place; otherwise a new rule is inserted. Used
+        by the merge import so re-importing the same rule is idempotent rather
+        than creating duplicates. Returns {"success", "action", "id", "errors"}
+        where action is "updated" or "added".
+        """
+        errors = []
+        slave_id = rule.get("slave_id")
+        register_type = rule.get("register_type")
+        if slave_id is None:
+            errors.append("Missing slave_id")
+        if not register_type:
+            errors.append("Missing register_type")
+        if errors:
+            return {"success": False, "action": None, "id": None, "errors": errors}
+        try:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                server_id = rule.get("server_id", None)
+                address = rule.get("address", 0)
+                address_end = rule.get("address_end", None)
+                # Match on the natural key; NULL server_id / address_end need IS.
+                cursor.execute(
+                    """SELECT id FROM registers
+                       WHERE server_id IS ? AND slave_id = ? AND register_type = ?
+                         AND address = ? AND address_end IS ?""",
+                    (server_id, slave_id, register_type, address, address_end),
+                )
+                existing = cursor.fetchone()
+            finally:
+                conn.close()
+        except sqlite3.Error as e:
+            logger.error(f"Error matching register for upsert: {e}")
+            return {"success": False, "action": None, "id": None, "errors": [str(e)]}
+
+        if existing:
+            rule_id = existing[0]
+            result = self.update_register(rule_id, rule)
+            if not result["success"]:
+                return {"success": False, "action": None, "id": None, "errors": result["errors"]}
+            return {"success": True, "action": "updated", "id": rule_id, "errors": []}
+
+        result = self.add_register(rule)
+        if not result["success"]:
+            return {"success": False, "action": None, "id": None, "errors": result["errors"]}
+        return {"success": True, "action": "added", "id": result["id"], "errors": []}
+
     def delete_register(self, rule_id: int) -> dict:
         """Delete one register rule by its primary key id."""
         try:

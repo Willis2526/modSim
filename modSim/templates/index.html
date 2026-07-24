@@ -366,7 +366,12 @@
         <div class="card h-100">
           <div class="card-header"><i class="bi bi-upload me-1"></i>Import</div>
           <div class="card-body d-flex flex-column gap-2">
-            <div class="import-warning"><i class="bi bi-exclamation-triangle-fill"></i>Only sections present in the JSON are replaced — omit a key to leave that section untouched.</div>
+            <label class="form-label mt-1">Mode</label>
+            <select id="importMode" class="form-select form-select-sm" onchange="updateImportModeHint()">
+              <option value="merge" selected>Merge / sync — add to current config</option>
+              <option value="replace">Replace — wipe &amp; replace supplied sections</option>
+            </select>
+            <div id="importModeHint" class="import-warning"></div>
             <label class="form-label mt-1">Load from file</label>
             <div class="d-flex gap-2">
               <input type="file" id="importFile" accept=".json" class="form-control form-control-sm" />
@@ -374,8 +379,8 @@
             </div>
             <label class="form-label mt-1">Or paste JSON</label>
             <textarea id="importJson" class="form-control code" rows="12" placeholder='{"servers":[…],"slaves":[…],"registers":[…]}'></textarea>
-            <p style="font-size:.74rem;color:#9daab6" class="mb-0">Include only the sections you want to replace. E.g., <code>{"registers":[…]}</code> replaces only register rules.</p>
-            <button class="btn btn-sm btn-danger mt-1" onclick="applyImport()"><i class="bi bi-upload me-1"></i>Apply Import</button>
+            <p style="font-size:.74rem;color:#9daab6" class="mb-0">Only sections present in the JSON are touched. E.g., <code>{"registers":[…]}</code> affects only register rules.</p>
+            <button class="btn btn-sm btn-primary mt-1" onclick="applyImport()"><i class="bi bi-upload me-1"></i>Apply Import</button>
           </div>
         </div>
       </div>

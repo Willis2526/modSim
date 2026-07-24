@@ -239,6 +239,10 @@ class SingleRegisterRule(BaseModel):
 
 
 class ImportPayload(BaseModel):
+    # "merge" (default) upserts servers/slaves by id and register rules by their
+    # natural key, leaving anything not in the payload untouched. "replace" wipes
+    # each supplied section and replaces it wholesale (the original behaviour).
+    mode: str = "merge"
     servers: list = []
     slaves: list = []
     registers: list = []
@@ -535,10 +539,15 @@ class WebServer(threading.Thread):
             tags=["Import / Export"],
             summary="Import configuration from JSON",
             description=(
-                "Selectively replaces configuration sections. Only the sections present in the "
-                "payload are touched — omit `servers`/`slaves` keys to import only register rules, "
-                "or omit `registers` to import only topology. "
-                "Server changes trigger a Modbus server restart."
+                "Imports configuration in one of two modes set by the `mode` field. "
+                "`merge` (default) adds to the running config: servers/slaves are upserted "
+                "by id and register rules by their natural key "
+                "(server_id, slave_id, register_type, address, address_end), leaving anything "
+                "not in the payload untouched — re-importing the same file is idempotent. "
+                "`replace` wipes and replaces each supplied section wholesale. "
+                "Either way, only sections present in the payload are touched — omit "
+                "`servers`/`slaves` to import only register rules, or omit `registers` to "
+                "import only topology. Server changes trigger a Modbus server restart."
             ),
         )
 
@@ -998,42 +1007,95 @@ class WebServer(threading.Thread):
             return {"success": False, "message": str(e)}
 
     def import_handler(self, payload: ImportPayload):
-        """Import configuration. Only sections present in the payload are replaced.
-        Omit 'servers'/'slaves' keys to import only registers, and vice versa."""
+        """Import configuration in one of two modes.
+
+        - mode="merge" (default): upsert servers/slaves by id and register rules
+          by their natural key. Anything not named in the payload is left as-is,
+          so this adds to (or syncs with) the running configuration.
+        - mode="replace": wipe and replace each supplied section wholesale.
+
+        Either way, only sections present in the payload are touched — omit
+        'servers'/'slaves' to import only registers, and vice versa.
+        """
         try:
-            parts = []
-            restarted = False
+            mode = (payload.mode or "merge").lower()
+            if mode not in ("merge", "replace"):
+                return {"success": False, "message": f"Unknown import mode '{payload.mode}'."}
 
-            has_servers = payload.servers or payload.slaves
-            if has_servers:
-                servers = list(payload.servers)
-                slaves  = list(payload.slaves)
-                result = self.database.save_server_config(servers, slaves)
-                if not result["success"]:
-                    return {"success": False, "message": result["errors"]}
-                parts.append(f"{len(servers)} server(s), {len(slaves)} slave(s)")
-                if self.server_manager:
-                    self.server_manager.restart_modbus_servers()
-                    restarted = True
+            registers = list(payload.registers)
+            for reg in registers:
+                if isinstance(reg, dict):
+                    reg.pop("id", None)
 
-            if payload.registers:
-                registers = list(payload.registers)
-                for reg in registers:
-                    if isinstance(reg, dict):
-                        reg.pop("id", None)
-                reg_result = self.database.save_registers(registers)
-                if not reg_result["success"]:
-                    return {"success": False, "message": reg_result["errors"]}
-                parts.append(f"{len(registers)} register rule(s)")
-
-            if not parts:
-                return {"success": False, "message": "Payload contained no recognisable sections."}
-
-            suffix = " Modbus servers restarted." if restarted else ""
-            return {"success": True, "message": "Imported " + ", ".join(parts) + "." + suffix}
+            if mode == "replace":
+                return self._import_replace(list(payload.servers), list(payload.slaves), registers)
+            return self._import_merge(list(payload.servers), list(payload.slaves), registers)
         except Exception as e:
             logger.error("Error in import_handler: %s", e)
             return {"success": False, "message": str(e)}
+
+    def _import_replace(self, servers, slaves, registers):
+        """Original behaviour: replace each supplied section wholesale."""
+        parts = []
+        restarted = False
+
+        if servers or slaves:
+            result = self.database.save_server_config(servers, slaves)
+            if not result["success"]:
+                return {"success": False, "message": result["errors"]}
+            parts.append(f"{len(servers)} server(s), {len(slaves)} slave(s)")
+            if self.server_manager:
+                self.server_manager.restart_modbus_servers()
+                restarted = True
+
+        if registers:
+            reg_result = self.database.save_registers(registers)
+            if not reg_result["success"]:
+                return {"success": False, "message": reg_result["errors"]}
+            parts.append(f"{len(registers)} register rule(s)")
+
+        if not parts:
+            return {"success": False, "message": "Payload contained no recognisable sections."}
+
+        suffix = " Modbus servers restarted." if restarted else ""
+        return {"success": True, "message": "Replaced " + ", ".join(parts) + "." + suffix}
+
+    def _import_merge(self, servers, slaves, registers):
+        """Additive import: upsert servers/slaves by id and rules by natural key."""
+        parts = []
+        restarted = False
+
+        for server in servers:
+            result = self.database.upsert_server(server)
+            if not result["success"]:
+                return {"success": False, "message": result["errors"]}
+        for slave in slaves:
+            result = self.database.upsert_slave(slave)
+            if not result["success"]:
+                return {"success": False, "message": result["errors"]}
+        if servers or slaves:
+            parts.append(f"{len(servers)} server(s), {len(slaves)} slave(s)")
+            if self.server_manager:
+                self.server_manager.restart_modbus_servers()
+                restarted = True
+
+        if registers:
+            added = updated = 0
+            for reg in registers:
+                result = self.database.upsert_register(reg)
+                if not result["success"]:
+                    return {"success": False, "message": result["errors"]}
+                if result["action"] == "added":
+                    added += 1
+                else:
+                    updated += 1
+            parts.append(f"{added} rule(s) added, {updated} updated")
+
+        if not parts:
+            return {"success": False, "message": "Payload contained no recognisable sections."}
+
+        suffix = " Modbus servers restarted." if restarted else ""
+        return {"success": True, "message": "Merged " + ", ".join(parts) + "." + suffix}
 
 
 if __name__ == "__main__":
