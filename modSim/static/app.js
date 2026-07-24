@@ -5,19 +5,50 @@ var _editServerData = {};
 var _editRuleData   = {};
 var _editSlaveData  = {};
 
+// ── Router ────────────────────────────────────────────────────────────────────
+var ROUTES = [
+    { path: '/',              page: 'pDash',   title: 'Dashboard',       load: function() { loadDash(); } },
+    { path: '/servers',       page: 'pServer', title: 'Servers',         load: function() { loadServers(); } },
+    { path: '/registers',     page: 'pRegs',   title: 'Registers',       load: function() { loadRegs(); } },
+    { path: '/live',          page: 'pLive',   title: 'Live View',       load: null },
+    { path: '/import-export', page: 'pImport', title: 'Import / Export', load: function() { loadExportPreview(); updateImportModeHint(); } },
+    { path: '/reference',     page: 'pRef',    title: 'Reference',       load: null }
+];
+
+function routeFor(path) {
+    for (var i = 0; i < ROUTES.length; i++) {
+        if (ROUTES[i].path === path) return ROUTES[i];
+    }
+    return ROUTES[0];
+}
+
+function showPage(pageId) {
+    document.querySelectorAll('.page').forEach(function(p) { p.classList.add('d-none'); });
+    var el = document.getElementById(pageId);
+    if (el) el.classList.remove('d-none');
+    document.querySelectorAll('.sidebar a').forEach(function(a) { a.classList.remove('active'); });
+    var link = document.querySelector('.sidebar a[data-page="' + pageId + '"]');
+    if (link) link.classList.add('active');
+}
+
+function navigate(path, push) {
+    var route = routeFor(path);
+    showPage(route.page);
+    document.title = route.title + ' · modSim';
+    if (push) history.pushState({ path: route.path }, '', route.path);
+    if (route.load) route.load();
+}
+
+window.addEventListener('popstate', function(e) {
+    var path = (e.state && e.state.path) || location.pathname;
+    navigate(path, false);
+});
+
 // ── Sidebar navigation ────────────────────────────────────────────────────────
 document.querySelectorAll('.sidebar a[data-page]').forEach(function(link) {
     link.addEventListener('click', function(e) {
         e.preventDefault();
-        var pageId = this.dataset.page;
-        document.querySelectorAll('.page').forEach(function(p) { p.classList.add('d-none'); });
-        document.getElementById(pageId).classList.remove('d-none');
-        document.querySelectorAll('.sidebar a').forEach(function(a) { a.classList.remove('active'); });
-        this.classList.add('active');
-        if (pageId === 'pDash')   loadDash();
-        if (pageId === 'pRegs')   loadRegs();
-        if (pageId === 'pServer') loadServers();
-        if (pageId === 'pImport') { loadExportPreview(); updateImportModeHint(); }
+        navigate(link.getAttribute('href'), true);
     });
 });
 
@@ -200,14 +231,14 @@ async function loadRegs() {
             var cfgDisplay = Object.assign({}, cfg);
             delete cfgDisplay.float32;
             return '<tr>' +
-                '<td style="color:#5a6470">' + r.id + '</td>' +
-                '<td>' + (r.server_id != null ? r.server_id : '<span style="color:#5a6470">—</span>') + '</td>' +
+                '<td style="color:var(--text-faint)">' + r.id + '</td>' +
+                '<td>' + (r.server_id != null ? r.server_id : '<span style="color:var(--text-faint)">—</span>') + '</td>' +
                 '<td>' + r.slave_id + '</td>' +
-                '<td><code style="color:#6cb6ff">' + r.register_type + '</code></td>' +
+                '<td><code style="color:var(--accent)">' + r.register_type + '</code></td>' +
                 '<td>' + (r.address     != null ? r.address     : '—') + '</td>' +
                 '<td>' + (r.address_end != null ? r.address_end : '—') + '</td>' +
                 '<td><span class="badge bg-info text-dark mode-badge">' + (r.simulation_mode || '—') + '</span>' + f32badge + '</td>' +
-                '<td><small style="color:#9daab6">' + JSON.stringify(cfgDisplay) + '</small></td>' +
+                '<td><small style="color:var(--text-muted)">' + JSON.stringify(cfgDisplay) + '</small></td>' +
                 '<td class="d-flex gap-1">' +
                 '<button class="btn-row-edit" onclick="openEditRule(_editRuleData[' + r.id + '])" title="Edit rule"><i class="bi bi-pencil"></i></button>' +
                 '<button class="btn-row-del" onclick="deleteRule(' + r.id + ')" title="Delete rule"><i class="bi bi-trash3"></i></button>' +
@@ -435,11 +466,11 @@ async function fetchLive() {
     var tbody = document.getElementById('liveTbody');
 
     if (!res.success) {
-        tbody.innerHTML = '<tr><td colspan="5" class="text-center py-3" style="color:#f85149">' + res.message + '</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center py-3" style="color:var(--danger)">' + res.message + '</td></tr>';
         return;
     }
     if (!res.values || !res.values.length) {
-        tbody.innerHTML = '<tr><td colspan="5" class="text-center py-3" style="color:#8b949e">No simulated registers on this server</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center py-3" style="color:var(--text-muted)">No simulated registers on this server</td></tr>';
         return;
     }
 
@@ -448,7 +479,7 @@ async function fetchLive() {
         var f32badge = v.float32 ? ' <span class="badge bg-warning text-dark" style="font-size:.6rem">f32</span>' : '';
         return '<tr>' +
             '<td>' + v.slave_id + '</td>' +
-            '<td><code style="color:#6cb6ff">' + v.register_type + '</code></td>' +
+            '<td><code style="color:var(--accent)">' + v.register_type + '</code></td>' +
             '<td>' + v.address + '</td>' +
             '<td><strong>' + valStr + '</strong>' + f32badge + '</td>' +
             '<td><span class="badge bg-info text-dark mode-badge">' + (v.simulation_mode || '') + '</span></td>' +
@@ -546,14 +577,14 @@ function tbl(id, rows, rowFn) {
     if (!tbody) return;
     tbody.innerHTML = (rows && rows.length)
         ? rows.map(function(r) { return '<tr>' + rowFn(r) + '</tr>'; }).join('')
-        : '<tr><td colspan="99" class="text-center py-3" style="color:#8b949e">None</td></tr>';
+        : '<tr><td colspan="99" class="text-center py-3" style="color:var(--text-muted)">None</td></tr>';
 }
 
 function toast(msg, type) {
     type = type || 'info';
     var id = 'toast-' + Date.now();
     var icon = { success: 'bi-check-circle-fill', danger: 'bi-x-circle-fill', warning: 'bi-exclamation-triangle-fill', info: 'bi-info-circle-fill' };
-    var color = { success: '#3fb950', danger: '#f85149', warning: '#e3b341', info: '#58a6ff' };
+    var color = { success: 'var(--success)', danger: 'var(--danger)', warning: 'var(--warning)', info: 'var(--accent)' };
     var c = color[type] || color.info;
     var ic = icon[type] || icon.info;
     document.getElementById('toastBox').insertAdjacentHTML('beforeend',
@@ -561,35 +592,79 @@ function toast(msg, type) {
         '<div class="d-flex align-items-center gap-2 toast-body" style="padding:.6rem .8rem">' +
         '<i class="bi ' + ic + '" style="color:' + c + ';flex-shrink:0"></i>' +
         '<span style="flex:1">' + msg + '</span>' +
-        '<button type="button" class="btn-close btn-close-white ms-auto" data-bs-dismiss="toast" style="font-size:.7rem"></button>' +
+        '<button type="button" class="btn-close ms-auto" data-bs-dismiss="toast" style="font-size:.7rem"></button>' +
         '</div></div>');
     var el = document.getElementById(id);
     new bootstrap.Toast(el, { delay: 5000 }).show();
     el.addEventListener('hidden.bs.toast', function() { el.remove(); });
 }
 
-// ── Mobile sidebar toggle ─────────────────────────────────────────────────────
+// ── Sidebar toggle (mobile off-canvas + desktop icon-rail collapse) ────────────
 (function() {
     var toggle   = document.getElementById('sidebarToggle');
     var sidebar  = document.querySelector('.sidebar');
     var backdrop = document.getElementById('sidebarBackdrop');
     if (!toggle || !sidebar || !backdrop) return;
 
+    var COLLAPSE_KEY = 'modsim-sidebar-collapsed';
+
+    function isMobile() { return window.innerWidth < 768; }
+
     function openSidebar()  { sidebar.classList.add('open');  backdrop.classList.add('open'); }
     function closeSidebar() { sidebar.classList.remove('open'); backdrop.classList.remove('open'); }
 
+    function setCollapsed(collapsed) {
+        document.body.classList.toggle('sidebar-collapsed', collapsed);
+        localStorage.setItem(COLLAPSE_KEY, collapsed ? '1' : '0');
+    }
+
+    // Restore persisted desktop collapse state on load.
+    if (!isMobile() && localStorage.getItem(COLLAPSE_KEY) === '1') {
+        document.body.classList.add('sidebar-collapsed');
+    }
+
     toggle.addEventListener('click', function() {
-        sidebar.classList.contains('open') ? closeSidebar() : openSidebar();
+        if (isMobile()) {
+            sidebar.classList.contains('open') ? closeSidebar() : openSidebar();
+        } else {
+            setCollapsed(!document.body.classList.contains('sidebar-collapsed'));
+        }
     });
     backdrop.addEventListener('click', closeSidebar);
 
     // Close sidebar when a nav link is clicked on mobile
     sidebar.querySelectorAll('a[data-page]').forEach(function(a) {
         a.addEventListener('click', function() {
-            if (window.innerWidth < 768) closeSidebar();
+            if (isMobile()) closeSidebar();
         });
     });
 })();
 
+// ── Theme toggle ──────────────────────────────────────────────────────────────
+(function() {
+    var toggle = document.getElementById('themeToggle');
+    var icon   = document.getElementById('themeIcon');
+    if (!toggle || !icon) return;
+
+    function effectiveTheme() {
+        var explicit = document.documentElement.dataset.theme;
+        if (explicit === 'light' || explicit === 'dark') return explicit;
+        return (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
+    }
+
+    function syncIcon() {
+        icon.className = 'bi ' + (effectiveTheme() === 'dark' ? 'bi-sun' : 'bi-moon-stars');
+    }
+
+    toggle.addEventListener('click', function() {
+        var next = effectiveTheme() === 'dark' ? 'light' : 'dark';
+        document.documentElement.dataset.theme = next;
+        localStorage.setItem('modsim-theme', next);
+        syncIcon();
+    });
+
+    syncIcon();
+})();
+
 // ── Boot ──────────────────────────────────────────────────────────────────────
-loadDash();
+navigate(location.pathname, false);

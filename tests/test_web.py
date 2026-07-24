@@ -67,6 +67,20 @@ def client(web_server):
     return TestClient(web_server.app)
 
 
+class TestSpaRoutes:
+    """Each client-side page has its own server route serving the SPA shell,
+    so a direct load or refresh on any of them works instead of 404ing."""
+
+    @pytest.mark.parametrize("path", [
+        "/", "/servers", "/registers", "/live", "/import-export", "/reference",
+    ])
+    def test_page_route_serves_shell(self, client, path):
+        response = client.get(path)
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/html")
+        assert "modSim" in response.text
+
+
 class TestWebServerEndpoints:
     """Test cases for WebServer API endpoints"""
 

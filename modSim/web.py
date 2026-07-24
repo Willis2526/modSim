@@ -369,13 +369,20 @@ class WebServer(threading.Thread):
         self.port = port
 
         # ── Routes ────────────────────────────────────────────────────────────
-        self.app.add_api_route(
-            path="/",
-            endpoint=self.ui_handler,
-            methods=["GET"],
-            include_in_schema=False,
-            response_class=FileResponse,
-        )
+        # Each of these serves the same SPA shell (index.html); the client-side
+        # router in app.js shows the matching page based on the URL. Registering
+        # a route per path (rather than a catch-all) means a direct load or
+        # refresh on any of them returns the shell instead of a 404, while
+        # leaving every other route in this file unaffected.
+        _spa_paths = ("/", "/servers", "/registers", "/live", "/import-export", "/reference")
+        for _spa_path in _spa_paths:
+            self.app.add_api_route(
+                path=_spa_path,
+                endpoint=self.ui_handler,
+                methods=["GET"],
+                include_in_schema=False,
+                response_class=FileResponse,
+            )
         self.app.mount(
             "/static",
             StaticFiles(directory=str(_STATIC_DIR)),
