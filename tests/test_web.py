@@ -1073,6 +1073,42 @@ class TestServerCRUD:
         assert response.status_code == 200
         assert response.json()["success"] is False
 
+    def test_delete_server_removes_its_register_rules(self, client):
+        """Deleting a server must not leave orphaned register rules behind."""
+        client.post("/servers/add", json={"server_id": 2, "ip": "0.0.0.0", "port": 504})
+        client.post("/rules/add", json={"server_id": 2, "slave_id": 0, "register_type": "hr",
+                                        "address": 17, "simulate": True})
+        client.post("/rules/add", json={"server_id": 2, "slave_id": 1, "register_type": "hr",
+                                        "address": 21, "simulate": True})
+        # A rule on a different server must survive
+        client.post("/rules/add", json={"server_id": 0, "slave_id": 0, "register_type": "hr",
+                                        "address": 5, "simulate": True})
+
+        resp = client.delete("/servers/2").json()
+        assert resp["success"] is True
+        assert "2 register rule(s)" in resp["message"]
+
+        regs = client.get("/get-registers").json()["registers"]
+        assert not any(r["server_id"] == 2 for r in regs)   # orphans removed
+        assert any(r["server_id"] == 0 for r in regs)        # other server untouched
+
+    def test_delete_slave_removes_its_register_rules(self, client):
+        client.post("/servers/add", json={"server_id": 2, "ip": "0.0.0.0", "port": 504})
+        client.put("/slaves/2/0", json={"server_id": 2, "slave_id": 0,
+                                        "co_size": 100, "di_size": 100, "hr_size": 100, "ir_size": 100})
+        client.post("/rules/add", json={"server_id": 2, "slave_id": 0, "register_type": "hr",
+                                        "address": 17, "simulate": True})
+        client.post("/rules/add", json={"server_id": 2, "slave_id": 1, "register_type": "hr",
+                                        "address": 21, "simulate": True})
+
+        resp = client.delete("/slaves/2/0").json()
+        assert resp["success"] is True
+        assert "1 register rule(s)" in resp["message"]
+
+        regs = client.get("/get-registers").json()["registers"]
+        assert not any(r["server_id"] == 2 and r["slave_id"] == 0 for r in regs)
+        assert any(r["server_id"] == 2 and r["slave_id"] == 1 for r in regs)  # other slave kept
+
 
 class TestExportImport:
     """Tests for export / import endpoints."""

@@ -454,7 +454,7 @@ class WebServer(threading.Thread):
             methods=["DELETE"],
             tags=["Servers"],
             summary="Delete a server",
-            description="Removes a server and all its slave records (cascades). Triggers a Modbus server restart.",
+            description="Removes a server, all its slave records (cascades), and all register rules for that server. Triggers a Modbus server restart.",
         )
         self.app.add_api_route(
             path="/slaves/{server_id}/{slave_id}",
@@ -470,7 +470,7 @@ class WebServer(threading.Thread):
             methods=["DELETE"],
             tags=["Servers"],
             summary="Delete a slave",
-            description="Removes a slave from a server. Triggers a Modbus server restart.",
+            description="Removes a slave from a server, along with the register rules bound to it. Triggers a Modbus server restart.",
         )
 
         # ── Register Rules ────────────────────────────────────────────────────
@@ -913,11 +913,13 @@ class WebServer(threading.Thread):
                 return {"success": False, "message": result["errors"]}
             if not result["deleted"]:
                 return {"success": False, "message": f"Slave {server_id}/{slave_id} not found."}
+            rules = result.get("registers_deleted", 0)
+            rules_note = f" and {rules} register rule(s)" if rules else ""
             if self.server_manager:
                 self.server_manager.restart_modbus_servers()
-                msg = f"Slave {server_id}/{slave_id} deleted and Modbus servers restarted."
+                msg = f"Slave {server_id}/{slave_id}{rules_note} deleted and Modbus servers restarted."
             else:
-                msg = f"Slave {server_id}/{slave_id} deleted. Restart application to apply."
+                msg = f"Slave {server_id}/{slave_id}{rules_note} deleted. Restart application to apply."
             return {"success": True, "message": msg}
         except Exception as e:
             return {"success": False, "message": str(e)}
@@ -969,11 +971,13 @@ class WebServer(threading.Thread):
                 return {"success": False, "message": result["errors"]}
             if not result["deleted"]:
                 return {"success": False, "message": f"Server {server_id} not found."}
+            rules = result.get("registers_deleted", 0)
+            rules_note = f" and {rules} register rule(s)" if rules else ""
             if self.server_manager:
                 self.server_manager.restart_modbus_servers()
-                msg = f"Server {server_id} deleted and Modbus servers restarted."
+                msg = f"Server {server_id}{rules_note} deleted and Modbus servers restarted."
             else:
-                msg = f"Server {server_id} deleted. Restart application to apply."
+                msg = f"Server {server_id}{rules_note} deleted. Restart application to apply."
             return {"success": True, "message": msg}
         except Exception as e:
             return {"success": False, "message": str(e)}

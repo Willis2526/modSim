@@ -337,37 +337,57 @@ class Database:
             return {"success": False, "errors": [str(e)]}
 
     def delete_server(self, server_id: int) -> dict:
-        """Delete a server and its slaves (CASCADE). Register rules with this server_id remain."""
+        """Delete a server, its slaves, and its register rules.
+
+        Slaves cascade via the foreign key; register rules are keyed by a
+        nullable server_id with no FK, so they are removed explicitly here to
+        avoid leaving orphaned rules behind. Returns the count of rules removed.
+        """
         try:
             conn = self._get_connection()
             try:
                 cursor = conn.cursor()
+                cursor.execute("DELETE FROM registers WHERE server_id = ?", (server_id,))
+                registers_deleted = cursor.rowcount
                 cursor.execute("DELETE FROM servers WHERE server_id = ?", (server_id,))
+                deleted = cursor.rowcount > 0
                 conn.commit()
-                return {"success": True, "deleted": cursor.rowcount > 0, "errors": []}
+                return {"success": True, "deleted": deleted,
+                        "registers_deleted": registers_deleted, "errors": []}
             finally:
                 conn.close()
         except sqlite3.Error as e:
             logger.error(f"Error deleting server {server_id}: {e}")
-            return {"success": False, "deleted": False, "errors": [str(e)]}
+            return {"success": False, "deleted": False, "registers_deleted": 0, "errors": [str(e)]}
 
     def delete_slave(self, server_id: int, slave_id: int) -> dict:
-        """Delete a slave by server_id and slave_id."""
+        """Delete a slave and the register rules bound to it.
+
+        Register rules reference (server_id, slave_id) without a foreign key, so
+        the matching rules are removed explicitly. Returns the count removed.
+        """
         try:
             conn = self._get_connection()
             try:
                 cursor = conn.cursor()
                 cursor.execute(
+                    "DELETE FROM registers WHERE server_id = ? AND slave_id = ?",
+                    (server_id, slave_id)
+                )
+                registers_deleted = cursor.rowcount
+                cursor.execute(
                     "DELETE FROM slaves WHERE server_id = ? AND slave_id = ?",
                     (server_id, slave_id)
                 )
+                deleted = cursor.rowcount > 0
                 conn.commit()
-                return {"success": True, "deleted": cursor.rowcount > 0, "errors": []}
+                return {"success": True, "deleted": deleted,
+                        "registers_deleted": registers_deleted, "errors": []}
             finally:
                 conn.close()
         except sqlite3.Error as e:
             logger.error(f"Error deleting slave {server_id}/{slave_id}: {e}")
-            return {"success": False, "deleted": False, "errors": [str(e)]}
+            return {"success": False, "deleted": False, "registers_deleted": 0, "errors": [str(e)]}
 
     def save_registers(self, registers):
         try:
