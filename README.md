@@ -27,10 +27,62 @@ A configurable Modbus TCP server with a browser-based UI and REST API. Supports 
 
 ### Docker (recommended)
 
+Prebuilt images are published to GitHub Container Registry.
+
+**Quick try** — one-liner, no clone, no persistence (config resets when the container is removed):
+
+```bash
+docker run -d --name modsim -p 8000:8000 -p 502-520:502-520 ghcr.io/twillislabs/modsim:latest
+```
+
+```bash
+docker compose -f - up -d --pull always <<< '
+services:
+  modsim:
+    image: ghcr.io/twillislabs/modsim:latest
+    ports:
+      - "8000:8000"
+      - "502-520:502-520"
+'
+```
+
+#### Option A — `docker compose` (build from source)
+
 ```bash
 git clone <repo>
 docker-compose up -d
 ```
+
+#### Option B — `docker compose` (prebuilt image)
+
+Pulls the published image instead of building locally:
+
+```bash
+git clone <repo>
+docker compose pull
+docker compose up -d
+```
+
+Pin a specific version instead of `latest` by setting `MODSIM_TAG`, e.g. in `.env`:
+
+```bash
+MODSIM_TAG=v1.2.0
+```
+
+#### Option C — `docker run` (prebuilt image, no compose)
+
+```bash
+docker run -d \
+  --name modsim \
+  -p 8000:8000 \
+  -p 502-520:502-520 \
+  -v $(pwd)/data:/app/data \
+  -w /app/data \
+  --restart unless-stopped \
+  ghcr.io/twillislabs/modsim:latest
+```
+
+All three options expose:
 
 - Modbus TCP: `localhost:502`
 - Web UI / API: `http://localhost:8000`
@@ -38,8 +90,10 @@ docker-compose up -d
 Configuration files (`settings.json`, `settings.db`) are persisted in `./data`.
 
 ```bash
-docker-compose down        # stop
-docker-compose logs -f     # stream logs
+docker-compose down        # stop (compose)
+docker-compose logs -f     # stream logs (compose)
+docker stop modsim         # stop (docker run)
+docker logs -f modsim      # stream logs (docker run)
 ```
 
 **Additional servers.** New servers can be added at any time from the web UI
@@ -57,6 +111,9 @@ cp .env.example .env
 # edit .env, e.g. MODBUS_PORT_RANGE=502-550
 docker-compose up -d
 ```
+
+With `docker run`, widen the range by changing the `-p 502-520:502-520` flag
+to match instead.
 
 A server outside the published range still runs and is reachable from other
 containers on the compose network, just not from outside Docker.

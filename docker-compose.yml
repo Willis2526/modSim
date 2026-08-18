@@ -1,5 +1,6 @@
 services:
   modsim:
+    image: ghcr.io/twillislabs/modsim:${MODSIM_TAG:-latest}
     build: .
     container_name: modsim
     restart: unless-stopped
