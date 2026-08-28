@@ -8,13 +8,14 @@ var _editSlaveData  = {};
 var _regsRaw    = [];                                    // last-fetched rows, untouched
 var _regsSort   = { key: null, dir: 0 };                  // dir: 0=none, 1=asc, -1=desc
 var _regsFilter = { server: '', slave: '', type: '', q: '' };
+var _serverVendorMap = {};                                // server_id -> vendor_name
 
 // ── Router ────────────────────────────────────────────────────────────────────
 var ROUTES = [
     { path: '/',              page: 'pDash',   title: 'Dashboard',       load: function() { loadDash(); } },
     { path: '/servers',       page: 'pServer', title: 'Servers',         load: function() { loadServers(); } },
     { path: '/registers',     page: 'pRegs',   title: 'Registers',       load: function() { loadRegs(); } },
-    { path: '/live',          page: 'pLive',   title: 'Live View',       load: null },
+    { path: '/live',          page: 'pLive',   title: 'Live View',       load: function() { loadLiveServers(); } },
     { path: '/import-export', page: 'pImport', title: 'Import / Export', load: function() { loadExportPreview(); updateImportModeHint(); } },
     { path: '/reference',     page: 'pRef',    title: 'Reference',       load: null }
 ];
@@ -70,13 +71,19 @@ async function loadDash() {
         }
 
         if (cfg.success) {
+            _serverVendorMap = {};
+            cfg.servers.forEach(function(s) { _serverVendorMap[s.server_id] = s.vendor_name; });
+
             tbl('tServers', cfg.servers, function(s) {
                 return '<td>' + s.server_id + '</td><td>' + s.ip + ':' + s.port + '</td>' +
-                       '<td>' + s.vendor_name + '</td>' +
+                       '<td>' + escapeHtml(s.vendor_name) + '</td>' +
                        '<td><span class="badge bg-success">Running</span></td>';
             });
             tbl('tSlaves', cfg.slaves, function(s) {
-                return '<td>' + s.server_id + '</td><td>' + s.slave_id + '</td>' +
+                var vendor = _serverVendorMap[s.server_id];
+                return '<td>' + s.server_id + '</td>' +
+                       '<td>' + (vendor ? escapeHtml(vendor) : '<span style="color:var(--text-faint)">—</span>') + '</td>' +
+                       '<td>' + s.slave_id + '</td>' +
                        '<td>' + s.co_size + '</td><td>' + s.di_size + '</td>' +
                        '<td>' + s.hr_size + '</td><td>' + s.ir_size + '</td>';
             });
@@ -98,7 +105,11 @@ async function loadServers() {
     }
 
     _editServerData = {};
-    res.servers.forEach(function(s) { _editServerData[s.server_id] = s; });
+    _serverVendorMap = {};
+    res.servers.forEach(function(s) {
+        _editServerData[s.server_id] = s;
+        _serverVendorMap[s.server_id] = s.vendor_name;
+    });
     wrap.innerHTML = res.servers.length
         ? res.servers.map(function(s) {
             return '<div class="col-sm-6 col-lg-4">' +
@@ -111,7 +122,7 @@ async function loadServers() {
                    '</div>' +
                    '<div class="server-card-title">Server ' + s.server_id + '</div>' +
                    '<div class="server-card-sub">' + s.ip + ':' + s.port + '</div>' +
-                   '<div class="server-card-sub">' + s.vendor_name + ' &mdash; ' + s.version + '</div>' +
+                   '<div class="server-card-sub">' + escapeHtml(s.vendor_name) + ' &mdash; ' + escapeHtml(s.version) + '</div>' +
                    '<div class="server-card-sub"><span class="badge ' + (s.zero_based === false ? 'bg-warning text-dark' : 'bg-secondary') + '" style="font-size:.6rem">' + (s.zero_based === false ? '1-based' : '0-based') + '</span></div>' +
                    '</div></div>';
           }).join('')
@@ -121,7 +132,10 @@ async function loadServers() {
     res.slaves.forEach(function(s) { _editSlaveData[s.server_id + '_' + s.slave_id] = s; });
     tbl('tSlavesServer', res.slaves, function(s) {
         var key = s.server_id + '_' + s.slave_id;
-        return '<td>' + s.server_id + '</td><td>' + s.slave_id + '</td>' +
+        var vendor = _serverVendorMap[s.server_id];
+        return '<td>' + s.server_id + '</td>' +
+               '<td>' + (vendor ? escapeHtml(vendor) : '<span style="color:var(--text-faint)">—</span>') + '</td>' +
+               '<td>' + s.slave_id + '</td>' +
                '<td>' + s.co_size + '</td><td>' + s.di_size + '</td>' +
                '<td>' + s.hr_size + '</td><td>' + s.ir_size + '</td>' +
                '<td class="d-flex gap-1">' +
@@ -132,7 +146,9 @@ async function loadServers() {
 }
 
 async function deleteServer(serverId) {
-    if (!confirm('Delete server ' + serverId + ' and all its slaves?')) return;
+    var vendor = _serverVendorMap[serverId];
+    var label = 'server ' + serverId + (vendor ? ' (' + vendor + ')' : '');
+    if (!confirm('Delete ' + label + ' and all its slaves?')) return;
     var res = await api('/servers/' + serverId, 'DELETE');
     toast(res.message || (res.success ? 'Deleted' : 'Error'), res.success ? 'success' : 'danger');
     if (res.success) loadServers();
@@ -191,8 +207,17 @@ async function loadRegs() {
     _editRuleData = {};
     _regsRaw.forEach(function(r) { _editRuleData[r.id] = r; });
 
+    await refreshServerVendorMap();
     populateRegsServerFilter();
     renderRegsTable();
+}
+
+async function refreshServerVendorMap() {
+    var cfg = await api('/get-server-config');
+    _serverVendorMap = {};
+    if (cfg.success && cfg.servers) {
+        cfg.servers.forEach(function(s) { _serverVendorMap[s.server_id] = s.vendor_name; });
+    }
 }
 
 function populateRegsServerFilter() {
@@ -201,8 +226,7 @@ function populateRegsServerFilter() {
     var current = sel.value;
     var servers = Array.from(new Set(_regsRaw.map(function(r) { return r.server_id; })
         .filter(function(id) { return id != null; }))).sort(function(a, b) { return a - b; });
-    sel.innerHTML = '<option value="">All Servers</option>' +
-        servers.map(function(id) { return '<option value="' + id + '">Server ' + id + '</option>'; }).join('');
+    sel.innerHTML = '<option value="">All Servers</option>' + serverOptionsHtml(servers);
     sel.value = current;
 }
 
@@ -255,8 +279,9 @@ function renderRegsTable() {
     var thead = '<tr>' + REGS_COLUMNS.map(function(c) {
         var active = _regsSort.key === c.key && _regsSort.dir !== 0;
         var icon = active ? (_regsSort.dir === 1 ? 'bi-caret-up-fill' : 'bi-caret-down-fill') : '';
-        return '<th class="th-sortable' + (active ? ' active' : '') + '" onclick="onRegsHeaderClick(\'' + c.key + '\')">' +
+        var th = '<th class="th-sortable' + (active ? ' active' : '') + '" onclick="onRegsHeaderClick(\'' + c.key + '\')">' +
                c.label + (icon ? ' <i class="bi ' + icon + ' sort-icon"></i>' : '') + '</th>';
+        return c.key === 'server_id' ? th + '<th>Vendor</th>' : th;
     }).join('') + '<th>Config</th><th></th></tr>';
 
     wrap.innerHTML =
@@ -268,9 +293,11 @@ function renderRegsTable() {
             var f32badge = cfg.float32 ? ' <span class="badge bg-warning text-dark" style="font-size:.6rem;vertical-align:middle">f32</span>' : '';
             var cfgDisplay = Object.assign({}, cfg);
             delete cfgDisplay.float32;
+            var vendor = r.server_id != null ? _serverVendorMap[r.server_id] : null;
             return '<tr>' +
                 '<td style="color:var(--text-faint)">' + r.id + '</td>' +
                 '<td>' + (r.server_id != null ? r.server_id : '<span style="color:var(--text-faint)">—</span>') + '</td>' +
+                '<td>' + (vendor ? escapeHtml(vendor) : '<span style="color:var(--text-faint)">—</span>') + '</td>' +
                 '<td>' + r.slave_id + '</td>' +
                 '<td><code style="color:var(--accent)">' + r.register_type + '</code></td>' +
                 '<td>' + (r.address     != null ? r.address     : '—') + '</td>' +
@@ -363,6 +390,20 @@ async function regApply() {
 // ── Edit rule modal ───────────────────────────────────────────────────────────
 var _editRuleModal = null;
 
+function populateEditRuleServerSelect(ensureId) {
+    var sel = document.getElementById('erSrv');
+    if (!sel) return;
+    var ids = Object.keys(_serverVendorMap).map(Number);
+    if (ensureId != null && ids.indexOf(ensureId) === -1) ids.push(ensureId);
+    ids.sort(function(a, b) { return a - b; });
+    sel.innerHTML = '<option value="">All Servers</option>' +
+        ids.map(function(id) {
+            var vendor = _serverVendorMap[id];
+            var label = 'Server ' + id + (vendor ? ' — ' + vendor : ' — (unknown server)');
+            return '<option value="' + id + '">' + escapeHtml(label) + '</option>';
+        }).join('');
+}
+
 function openEditRule(r) {
     var modal = document.getElementById('editRuleModal');
     var isCreate = !r;
@@ -370,6 +411,8 @@ function openEditRule(r) {
     document.getElementById('erModalVerb').textContent = isCreate ? 'Add Rule' : 'Edit Rule';
     document.getElementById('erModalId').textContent   = isCreate ? '' : ('#' + r.id);
     document.getElementById('erSaveLabel').textContent = isCreate ? 'Add Rule' : 'Save Rule';
+
+    populateEditRuleServerSelect(isCreate ? null : r.server_id);
 
     var cfg = isCreate ? {} : (r.simulation_config || {});
     document.getElementById('erRuleId').value    = isCreate ? '' : r.id;
@@ -453,8 +496,14 @@ function openEditServer(s) {
     document.getElementById('esSaveLabel').textContent = isCreate ? 'Add Server' : 'Save Server';
 
     var idInput = document.getElementById('esServerId');
-    idInput.value = isCreate ? '' : s.server_id;
+    if (isCreate) {
+        var existingIds = Object.keys(_editServerData).map(Number);
+        idInput.value = existingIds.length ? (Math.max.apply(null, existingIds) + 1) : 0;
+    } else {
+        idInput.value = s.server_id;
+    }
     idInput.readOnly = !isCreate;
+    document.getElementById('esIdHelp').textContent = isCreate ? 'Next available — change if you need a specific ID' : '';
 
     document.getElementById('esIp').value        = isCreate ? '0.0.0.0'         : s.ip;
     document.getElementById('esPort').value      = isCreate ? 502              : s.port;
@@ -537,11 +586,16 @@ function openEditSlave(s) {
 
     var srvInput   = document.getElementById('slServerId');
     var slaveInput = document.getElementById('slSlaveId');
+
+    var ids = Object.keys(_serverVendorMap).map(Number);
+    if (!isCreate && ids.indexOf(s.server_id) === -1) ids.push(s.server_id);
+    ids.sort(function(a, b) { return a - b; });
+    srvInput.innerHTML = (isCreate ? '<option value="">Select a server…</option>' : '') + serverOptionsHtml(ids);
     srvInput.value   = isCreate ? '' : s.server_id;
     slaveInput.value = isCreate ? '' : s.slave_id;
-    srvInput.readOnly   = !isCreate;
-    slaveInput.readOnly = !isCreate;
-    document.getElementById('slServerHelp').textContent = isCreate ? 'Must match an existing server ID' : '';
+    srvInput.disabled    = !isCreate;
+    slaveInput.readOnly  = !isCreate;
+    document.getElementById('slServerHelp').textContent = isCreate && !ids.length ? 'No servers configured — add one first' : '';
     document.getElementById('slSlaveHelp').textContent  = isCreate ? 'Must be unique for this server' : '';
 
     document.getElementById('slCo').value = isCreate ? 100 : s.co_size;
@@ -586,13 +640,43 @@ async function saveEditSlave() {
 }
 
 async function deleteSlave(serverId, slaveId) {
-    if (!confirm('Delete slave ' + slaveId + ' from server ' + serverId + '?')) return;
+    var vendor = _serverVendorMap[serverId];
+    var label = 'server ' + serverId + (vendor ? ' (' + vendor + ')' : '');
+    if (!confirm('Delete slave ' + slaveId + ' from ' + label + '?')) return;
     var res = await api('/slaves/' + serverId + '/' + slaveId, 'DELETE');
     toast(res.message || (res.success ? 'Deleted' : 'Error'), res.success ? 'success' : 'danger');
     if (res.success) loadServers();
 }
 
 // ── Live view ─────────────────────────────────────────────────────────────────
+function serverOptionsHtml(ids) {
+    return ids.map(function(id) {
+        var vendor = _serverVendorMap[id];
+        var label = 'Server ' + id + (vendor ? ' — ' + vendor : '');
+        return '<option value="' + id + '">' + escapeHtml(label) + '</option>';
+    }).join('');
+}
+
+function _populateServerSelect(sel, optionsHtml, ids) {
+    if (!sel) return;
+    var current = sel.value;
+    sel.innerHTML = optionsHtml;
+    sel.value = ids.map(String).indexOf(current) !== -1 ? current : sel.options[0].value;
+}
+
+async function loadLiveServers() {
+    var lSel = document.getElementById('lSrv');
+    var dSel = document.getElementById('drwServer');
+    if (!lSel && !dSel) return;
+
+    await refreshServerVendorMap();
+    var ids = Object.keys(_serverVendorMap).map(Number).sort(function(a, b) { return a - b; });
+    var optionsHtml = ids.length ? serverOptionsHtml(ids) : '<option value="0">Server 0</option>';
+
+    _populateServerSelect(lSel, optionsHtml, ids);
+    _populateServerSelect(dSel, optionsHtml, ids);
+}
+
 function toggleLive() {
     if (liveTimer) {
         clearInterval(liveTimer);
@@ -797,6 +881,12 @@ async function api(path, method, body) {
     if (body !== undefined && body !== null) opts.body = JSON.stringify(body);
     var r = await fetch(path, opts);
     return r.json();
+}
+
+function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function(c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
 }
 
 function val(id) { return document.getElementById(id).value; }

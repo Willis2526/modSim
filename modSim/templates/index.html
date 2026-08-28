@@ -88,7 +88,7 @@
           <div class="card-header">Configured Slaves</div>
           <div class="card-body p-0">
             <table class="table table-sm table-hover mb-0" id="tSlaves">
-              <thead><tr><th>Srv</th><th>Slave</th><th>CO</th><th>DI</th><th>HR</th><th>IR</th></tr></thead>
+              <thead><tr><th>Srv</th><th>Vendor</th><th>Slave</th><th>CO</th><th>DI</th><th>HR</th><th>IR</th></tr></thead>
               <tbody></tbody>
             </table>
           </div>
@@ -118,7 +118,7 @@
       </div>
       <div class="card-body p-0">
         <table class="table table-sm mb-0" id="tSlavesServer">
-          <thead><tr><th>Srv</th><th>Slave</th><th>CO</th><th>DI</th><th>HR</th><th>IR</th><th></th></tr></thead>
+          <thead><tr><th>Srv</th><th>Vendor</th><th>Slave</th><th>CO</th><th>DI</th><th>HR</th><th>IR</th><th></th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -231,8 +231,10 @@
           Live Register Values
         </span>
         <div class="d-flex align-items-center gap-2">
-          <label class="form-label mb-0" style="color:var(--text-muted);font-size:.75rem">Server ID</label>
-          <input id="lSrv" type="number" value="0" class="form-control form-control-sm" style="width:60px" />
+          <label class="form-label mb-0" style="color:var(--text-muted);font-size:.75rem">Server</label>
+          <select id="lSrv" class="form-select form-select-sm" style="width:auto" onchange="fetchLive()">
+            <option value="0">Server 0</option>
+          </select>
           <button class="btn btn-sm btn-primary" onclick="toggleLive()" id="liveBtn">Start</button>
         </div>
       </div>
@@ -253,8 +255,10 @@
         <p class="field-help mb-2">Reads or writes a specific address directly, independent of any simulation rule. Bypasses the rule engine — if the address is also covered by an active rule, the simulation loop will overwrite a write here on its next tick (~1s).</p>
         <div class="row g-2 align-items-end">
           <div class="col-6 col-md-2">
-            <label class="form-label">Server ID</label>
-            <input id="drwServer" type="number" class="form-control form-control-sm" value="0" min="0" />
+            <label class="form-label">Server</label>
+            <select id="drwServer" class="form-select form-select-sm" onchange="checkRuleOverlap()">
+              <option value="0">Server 0</option>
+            </select>
           </div>
           <div class="col-6 col-md-2">
             <label class="form-label">Slave ID</label>
@@ -436,8 +440,10 @@
         <input type="hidden" id="erRuleId" />
         <div class="row g-2">
           <div class="col-6 col-md-2">
-            <label class="form-label">Server ID</label>
-            <input id="erSrv" type="number" class="form-control form-control-sm" placeholder="optional" />
+            <label class="form-label">Server</label>
+            <select id="erSrv" class="form-select form-select-sm">
+              <option value="">All Servers</option>
+            </select>
           </div>
           <div class="col-6 col-md-2">
             <label class="form-label">Slave ID <span class="text-danger">*</span></label>
@@ -513,8 +519,10 @@
       <div class="modal-body">
         <div class="row g-2">
           <div class="col-6">
-            <label class="form-label">Server ID</label>
-            <input id="slServerId" type="number" class="form-control form-control-sm" min="0" />
+            <label class="form-label">Server</label>
+            <select id="slServerId" class="form-select form-select-sm">
+              <option value="">Select a server…</option>
+            </select>
             <div class="field-help" id="slServerHelp"></div>
           </div>
           <div class="col-6">
