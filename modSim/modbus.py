@@ -27,7 +27,8 @@ class _SimContext(ModbusServerContext):
     super().__init__() to avoid the ModbusServerContext deprecation log.
     """
 
-    simdevices = []  # falsy → server skips SimCore wrapping
+    simdevices = []     # falsy → server skips SimCore wrapping
+    old_simulator = True  # → server uses this context object directly
 
     def __init__(self, devices: list[SimDevice]):
         self._simcore = SimCore(devices)
